@@ -1,0 +1,43 @@
+{
+  "name": "kaimono-baton",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "test": "vitest run",
+    "test:worker": "vitest run worker/test",
+    "test:coverage": "vitest run --coverage",
+    "manual:handwriting:preflight": "node scripts/handwriting-manual-test.mjs preflight",
+    "manual:handwriting:start": "node scripts/handwriting-manual-test.mjs start",
+    "manual:handwriting:stop": "node scripts/handwriting-manual-test.mjs stop",
+    "manual:handwriting:status": "node scripts/handwriting-manual-test.mjs status",
+    "manual:handwriting:recover": "node scripts/handwriting-manual-test.mjs recover",
+    "manual:handwriting:probe": "node scripts/handwriting-connectivity-probe.mjs",
+    "typecheck:worker": "tsc -p worker/tsconfig.json --noEmit",
+    "check:worker-bundle": "wrangler deploy worker/src/index.ts --dry-run --name kaimono-baton-handwriting-import --compatibility-date 2026-07-26 --outdir .wrangler/dry-run",
+    "build": "tsc -b && npm run typecheck:worker && vite build",
+    "preview": "vite preview",
+    "worker:dev": "wrangler dev --config worker/wrangler.toml",
+    "worker:deploy": "wrangler deploy --config worker/wrangler.toml"
+  },
+  "dependencies": {
+    "@google/genai": "2.13.0",
+    "lz-string": "^1.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260722.1",
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "@vitest/coverage-v8": "^4.1.9",
+    "happy-dom": "^20.11.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.114.0"
+  }
+}

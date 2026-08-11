@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+*.local
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+worker/.dev.vars
+worker/wrangler.toml
+.wrangler
+.manual-test

@@ -1,0 +1,3 @@
+# Local development only. Copy to worker/.dev.vars and never commit real values.
+GEMINI_API_KEY=replace-with-google-ai-studio-key
+TURNSTILE_SECRET_KEY=replace-with-turnstile-secret-key

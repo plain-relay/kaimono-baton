@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>買いものバトン 手書き依頼票</title>
+    <style>
+      :root {
+        color: #000;
+        background: #eee;
+        font-family:
+          "Yu Gothic", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      .screen-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        justify-content: center;
+        max-width: 210mm;
+        margin: 0 auto;
+        padding: 16px;
+      }
+
+      .screen-controls p {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .screen-controls button {
+        padding: 10px 20px;
+        border: 2px solid #000;
+        border-radius: 6px;
+        background: #fff;
+        color: #000;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .form-sheet {
+        position: relative;
+        width: min(194mm, calc(100% - 24px));
+        min-width: 0;
+        height: 277mm;
+        margin: 0 auto 24px;
+        padding: 12mm 0.8mm 10mm;
+        border: 1.2mm solid #000;
+        background: #fff;
+        color: #000;
+        overflow: hidden;
+      }
+
+      .alignment-marker {
+        position: absolute;
+        width: 8mm;
+        height: 8mm;
+      }
+
+      .alignment-marker svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      .marker-top-left {
+        top: 3mm;
+        left: 3mm;
+      }
+
+      .marker-top-right {
+        top: 3mm;
+        right: 3mm;
+      }
+
+      .marker-bottom-left {
+        bottom: 3mm;
+        left: 3mm;
+      }
+
+      .marker-bottom-right {
+        right: 3mm;
+        bottom: 3mm;
+      }
+
+      .form-header {
+        text-align: center;
+      }
+
+      .form-identifier {
+        margin: 0;
+        font: 700 11pt/1.2 ui-monospace, Consolas, monospace;
+        letter-spacing: 0.08em;
+      }
+
+      h1 {
+        margin: 2mm 0 1mm;
+        font-size: 20pt;
+        line-height: 1.2;
+      }
+
+      .form-instruction {
+        margin: 0 0 3mm;
+        font-size: 9.5pt;
+        line-height: 1.4;
+      }
+
+      table {
+        width: 100%;
+        height: 190mm;
+        border-collapse: collapse;
+        table-layout: fixed;
+        font-size: 11pt;
+      }
+
+      th,
+      td {
+        border: 0.45mm solid #000;
+      }
+
+      th {
+        height: 10mm;
+        padding: 1.5mm;
+        font-size: 10pt;
+        text-align: center;
+      }
+
+      td {
+        height: 15mm;
+        padding: 1.5mm 2mm;
+        vertical-align: middle;
+      }
+
+      .column-number {
+        width: 5.263%;
+        text-align: center;
+      }
+
+      .column-product {
+        width: 36.842%;
+      }
+
+      .column-quantity {
+        width: 10.526%;
+        text-align: center;
+      }
+
+      .column-condition {
+        width: 47.369%;
+      }
+
+      .row-number {
+        font-weight: 700;
+        text-align: center;
+      }
+
+      .form-notes {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 3mm;
+        margin: 4mm 0 0;
+        padding: 0;
+        font-size: 8.5pt;
+        line-height: 1.35;
+        list-style-position: inside;
+      }
+
+      .form-notes li {
+        margin: 0;
+      }
+
+      @page {
+        size: A4 portrait;
+        margin: 8mm;
+      }
+
+      @media print {
+        html,
+        body {
+          width: 194mm;
+          height: 281mm;
+          margin: 0;
+          background: #fff;
+        }
+
+        .screen-only {
+          display: none !important;
+        }
+
+        .form-sheet {
+          width: 194mm;
+          height: 277mm;
+          margin: 0;
+          break-after: avoid;
+          break-inside: avoid;
+          border-color: #000;
+          box-shadow: none;
+          print-color-adjust: exact;
+          -webkit-print-color-adjust: exact;
+        }
+
+        table {
+          width: 190mm;
+        }
+
+        .column-number {
+          width: 10mm;
+        }
+
+        .column-product {
+          width: 70mm;
+        }
+
+        .column-quantity {
+          width: 20mm;
+        }
+
+        .column-condition {
+          width: 90mm;
+        }
+      }
+
+      @media screen and (max-width: 700px) {
+        .screen-controls {
+          flex-direction: column;
+        }
+
+        .screen-controls button {
+          width: 100%;
+        }
+
+        .form-sheet {
+          height: auto;
+          min-height: 277mm;
+          padding-right: 8mm;
+          padding-left: 8mm;
+        }
+
+        h1 {
+          font-size: 16pt;
+        }
+
+        .form-notes {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section class="screen-controls screen-only" aria-label="印刷操作">
+      <p>A4・縦向き・倍率100%で印刷してください。</p>
+      <button type="button" onclick="window.print()">印刷する</button>
+    </section>
+
+    <main class="form-sheet">
+      <span class="alignment-marker marker-top-left" aria-hidden="true">
+        <svg viewBox="0 0 10 10" focusable="false">
+          <rect width="10" height="10" fill="#000" />
+        </svg>
+      </span>
+      <span class="alignment-marker marker-top-right" aria-hidden="true">
+        <svg viewBox="0 0 10 10" focusable="false">
+          <rect width="10" height="10" fill="#000" />
+        </svg>
+      </span>
+      <span class="alignment-marker marker-bottom-left" aria-hidden="true">
+        <svg viewBox="0 0 10 10" focusable="false">
+          <rect width="10" height="10" fill="#000" />
+        </svg>
+      </span>
+      <span class="alignment-marker marker-bottom-right" aria-hidden="true">
+        <svg viewBox="0 0 10 10" focusable="false">
+          <rect width="10" height="10" fill="#000" />
+        </svg>
+      </span>
+
+      <header class="form-header">
+        <p class="form-identifier">OTSUKAI FORM V1</p>
+        <h1>買いものバトン 手書き依頼票</h1>
+        <p class="form-instruction">
+          1行に1商品を書き、用紙全体と四隅の黒いマーカーが写るように撮影してください。
+        </p>
+      </header>
+
+      <table aria-label="手書き商品入力欄">
+        <thead>
+          <tr>
+            <th class="column-number" scope="col">行番号</th>
+            <th class="column-product" scope="col">商品名</th>
+            <th class="column-quantity" scope="col">個数</th>
+            <th class="column-condition" scope="col">条件</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="row-number">1</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">2</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">3</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">4</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">5</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">6</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">7</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">8</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">9</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">10</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">11</td><td></td><td></td><td></td></tr>
+          <tr><td class="row-number">12</td><td></td><td></td><td></td></tr>
+        </tbody>
+      </table>
+
+      <ul class="form-notes">
+        <li>個数は1〜20で書いてください。</li>
+        <li>条件は短く書いてください。</li>
+        <li>空行は読み取りません。</li>
+        <li>同じ商品は原則1行へまとめてください。</li>
+        <li>訂正は二重線で消し、余白か新しい行へ書き直してください。</li>
+      </ul>
+    </main>
+  </body>
+</html>

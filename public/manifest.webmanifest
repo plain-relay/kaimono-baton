@@ -1,0 +1,21 @@
+{
+  "name": "買いものバトン",
+  "short_name": "買いものバトン",
+  "description": "家庭内のお使い依頼を共有URLで渡せるスマホ向けWebアプリ",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8f4ec",
+  "theme_color": "#f4efe6",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

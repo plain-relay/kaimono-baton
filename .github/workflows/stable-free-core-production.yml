@@ -1,0 +1,148 @@
+name: Stable Free Core Production
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' &&
+      inputs.manual_test_mode != 'repository' &&
+      format('Deploy Pages [manual:{0}]', inputs.manual_test_session_id) ||
+      'Deploy to GitHub Pages' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      manual_test_mode:
+        description: Pages build mode
+        required: true
+        default: repository
+        type: choice
+        options:
+          - repository
+          - manual-on
+          - manual-off
+      manual_test_session_id:
+        description: Manual-test session ID (required outside repository mode)
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    env:
+      REPOSITORY_HANDWRITING_IMPORT_ENABLED: ${{ vars.VITE_HANDWRITING_IMPORT_ENABLED }}
+      REPOSITORY_HANDWRITING_DIAGNOSTICS_ENABLED: ${{ vars.VITE_HANDWRITING_DIAGNOSTICS_ENABLED }}
+      VITE_HANDWRITING_IMPORT_ENDPOINT: ${{ vars.VITE_HANDWRITING_IMPORT_ENDPOINT }}
+      VITE_TURNSTILE_SITE_KEY: ${{ vars.VITE_TURNSTILE_SITE_KEY }}
+      VITE_PRODUCT_PHOTOS_ENABLED: ${{ vars.VITE_PRODUCT_PHOTOS_ENABLED }}
+      VITE_LIVE_REQUESTS_ENABLED: ${{ vars.VITE_LIVE_REQUESTS_ENABLED }}
+      VITE_MANUAL_VALIDATION_ENABLED: ${{ vars.VITE_MANUAL_VALIDATION_ENABLED }}
+    steps:
+      - name: Reject non-main dispatch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Production deploys must be dispatched from main."
+          exit 1
+
+      - name: Verify deploy SHA is current remote main
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          remote_main_sha="$(
+            git ls-remote --exit-code \
+              "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+              refs/heads/main | awk '{ print $1 }'
+          )"
+          if [[ ! "$remote_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the current remote main SHA."
+            exit 1
+          fi
+          if [[ "$DEPLOY_SHA" != "$remote_main_sha" ]]; then
+            echo "::error::Deploy SHA is not the current remote main."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare deployment state
+        env:
+          MANUAL_TEST_MODE: >-
+            ${{ github.event_name == 'workflow_dispatch' &&
+                inputs.manual_test_mode || 'repository' }}
+          MANUAL_TEST_SESSION_ID: >-
+            ${{ github.event_name == 'workflow_dispatch' &&
+                inputs.manual_test_session_id || '' }}
+        run: node scripts/write-handwriting-deployment-state.mjs prepare
+
+      - name: Build
+        env:
+          BASE_PATH: /kaimono-baton/
+        run: npm run build
+
+      - name: Write deployment state manifest
+        run: node scripts/write-handwriting-deployment-state.mjs write
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Reverify deploy SHA is current remote main
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          remote_main_sha="$(
+            git ls-remote --exit-code \
+              "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+              refs/heads/main | awk '{ print $1 }'
+          )"
+          if [[ ! "$remote_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the current remote main SHA."
+            exit 1
+          fi
+          if [[ "$DEPLOY_SHA" != "$remote_main_sha" ]]; then
+            echo "::error::Deploy SHA is no longer the current remote main."
+            exit 1
+          fi
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

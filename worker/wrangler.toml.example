@@ -1,0 +1,29 @@
+name = "kaimono-baton-handwriting-import"
+main = "src/index.ts"
+compatibility_date = "2026-07-26"
+
+[vars]
+ALLOWED_ORIGINS = "https://plain-relay.github.io"
+DIAGNOSTIC_MODE = "false"
+PHOTO_API_ENABLED = "false"
+SHARED_REQUEST_API_ENABLED = "false"
+MANUAL_VALIDATION_ENABLED = "false"
+MANUAL_VALIDATION_EXPIRES_AT = ""
+
+[[durable_objects.bindings]]
+name = "PHOTO_OBJECTS"
+class_name = "PhotoObject"
+
+[[durable_objects.bindings]]
+name = "SHARED_REQUEST_OBJECTS"
+class_name = "SharedRequestObject"
+
+# Do not apply this migration in production without explicit approval.
+[[migrations]]
+tag = "photo-v1"
+new_sqlite_classes = ["PhotoObject"]
+
+# Keep prior migration entries when applying this later migration manually.
+[[migrations]]
+tag = "shared-request-v1"
+new_sqlite_classes = ["SharedRequestObject"]
