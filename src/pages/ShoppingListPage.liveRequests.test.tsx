@@ -61,6 +61,7 @@ describe('ShoppingListPage live request synchronization', () => {
   beforeEach(() => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
       true
+    vi.setSystemTime(new Date('2026-08-02T00:00:00.000Z'))
     window.localStorage.clear()
     Object.defineProperty(window.navigator, 'share', {
       configurable: true,
@@ -87,6 +88,7 @@ describe('ShoppingListPage live request synchronization', () => {
     container.remove()
     window.localStorage.clear()
     delete (window.navigator as unknown as Record<string, unknown>).share
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 

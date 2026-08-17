@@ -17,27 +17,36 @@ export function HomePage({
 
   return (
     <main className="page">
-      <section className="hero-card">
-        <p className="eyebrow">URL共有で使う、家庭向け買いもの依頼アプリ</p>
-        <h1>買いものバトン</h1>
-        <p className="lead">
-          家族に買い物を任せるとき、商品の数量や条件をURLで共有し、買う人が一人で完遂しやすくするアプリです。
+      <section className="hero-card product-home-hero">
+        <div className="product-home-title-row">
+          <h1>買いものバトン</h1>
+          <span className="product-home-status">外部試験版（Beta）</span>
+        </div>
+        <p className="product-home-copy">
+          <span>「これ買ってきて」を、</span>
+          <span>もっと伝えやすく。</span>
         </p>
-        <button type="button" className="primary-button large-button" onClick={onStartCreate}>
-          依頼を作る
-        </button>
-        <button
-          type="button"
-          className="secondary-button large-button"
-          onClick={onOpenProducts}
-        >
-          商品リストを編集
-        </button>
-        <button type="button" className="ghost-button large-button" onClick={onOpenAbout}>
-          このアプリについて
-        </button>
-        <p className="helper-text">
-          外部試験版（Beta）です。試験公開中のため、不具合がある場合があります。
+        <p className="lead product-home-description">
+          家族に渡せる買いものリストです。
+        </p>
+        <div className="product-home-actions">
+          <button
+            type="button"
+            className="primary-button large-button"
+            onClick={onStartCreate}
+          >
+            ＋ 新しい買いものリストを作る
+          </button>
+          <button
+            type="button"
+            className="secondary-button large-button"
+            onClick={onOpenProducts}
+          >
+            商品リストを編集
+          </button>
+        </div>
+        <p className="helper-text product-home-note">
+          テスト公開中のため、不具合がある場合があります。
         </p>
       </section>
 
@@ -50,15 +59,43 @@ export function HomePage({
         />
       ) : null}
 
-      <section className="info-card">
-        <h2>使い方</h2>
-        <ol className="steps-list">
-          <li>依頼者が商品と数量を選ぶ</li>
-          <li>共有URLを作って LINE などで送る</li>
-          <li>お使いする人がスマホで URL を開く</li>
-          <li>必要な数量と条件を確認してかご投入を記録し、迷った商品は相談する</li>
-          <li>会計前に未処理や未解決の相談を確認し、結果を共有する</li>
+      <section className="info-card product-home-guide" aria-labelledby="product-home-guide-title">
+        <p className="eyebrow">初めての方へ</p>
+        <h2 id="product-home-guide-title">買いものバトンの使い方</h2>
+        <ol className="product-home-steps">
+          <li>
+            <span className="product-home-step-number" aria-hidden="true">1</span>
+            <div>
+              <h3>作る</h3>
+              <p className="product-home-step-title">買ってきてほしいものをまとめる</p>
+              <p>商品・数量・必要な条件を買いものリストにまとめます。</p>
+            </div>
+          </li>
+          <li>
+            <span className="product-home-step-number" aria-hidden="true">2</span>
+            <div>
+              <h3>渡す</h3>
+              <p className="product-home-step-title">家族に買いものバトンを渡す</p>
+              <p>作成した共有URLをLINEなどで家族に送ります。</p>
+            </div>
+          </li>
+          <li>
+            <span className="product-home-step-number" aria-hidden="true">3</span>
+            <div>
+              <h3>買う</h3>
+              <p className="product-home-step-title">リストを見ながら買い物</p>
+              <p>受け取った人が必要な内容を確認しながら、買い物の進捗を記録します。</p>
+            </div>
+          </li>
         </ol>
+        <p className="product-home-summary">
+          作る → 渡す → 買う。だから「買いものバトン」。
+        </p>
+        <div className="product-home-about-action">
+          <button type="button" className="product-home-about-link" onClick={onOpenAbout}>
+            このアプリについて
+          </button>
+        </div>
       </section>
     </main>
   )

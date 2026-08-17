@@ -34,7 +34,7 @@ describe('home and about pages', () => {
     window.localStorage.clear()
   })
 
-  it('keeps the create action on home, adds the about action, and removes technical cards', () => {
+  it('renders the Product Home content and keeps all three actions available', () => {
     const onStartCreate = vi.fn()
     const onOpenProducts = vi.fn()
     const onOpenAbout = vi.fn()
@@ -46,14 +46,39 @@ describe('home and about pages', () => {
       />,
     ))
 
-    expect(container.textContent).toContain('依頼を作る')
+    expect(container.querySelector('h1')?.textContent).toBe('買いものバトン')
+    expect(container.textContent).toContain(
+      '「これ買ってきて」を、もっと伝えやすく。',
+    )
+    expect(container.textContent).toContain('家族に渡せる買いものリストです。')
+    expect(container.textContent).toContain('＋ 新しい買いものリストを作る')
     expect(container.textContent).toContain('商品リストを編集')
     expect(container.textContent).toContain('このアプリについて')
     expect(container.textContent).toContain('外部試験版（Beta）')
-    expect(container.textContent).toContain('試験公開中')
+    expect(container.textContent).toContain('テスト公開中')
+    expect(container.textContent).toContain('買いものバトンの使い方')
+    expect(container.textContent).toContain('作る → 渡す → 買う。')
     expect(container.textContent).not.toContain('サーバーや外部DB')
     expect(container.textContent).not.toContain('localStorage')
     expect(container.textContent).not.toContain('未バックアップの変更')
+
+    const steps = [...container.querySelectorAll('.product-home-steps > li')]
+    expect(steps).toHaveLength(3)
+    expect(steps.map((step) => step.querySelector('h3')?.textContent)).toEqual([
+      '作る',
+      '渡す',
+      '買う',
+    ])
+    expect(steps[0].textContent).toContain('商品・数量・必要な条件')
+    expect(steps[1].textContent).toContain('共有URLをLINEなどで家族に送ります')
+    expect(steps[2].textContent).toContain('買い物の進捗を記録します')
+
+    const createButton = [...container.querySelectorAll('button')].find(
+      (candidate) =>
+        candidate.textContent?.trim() === '＋ 新しい買いものリストを作る',
+    )
+    act(() => createButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onStartCreate).toHaveBeenCalledTimes(1)
 
     const productsButton = [...container.querySelectorAll('button')].find(
       (candidate) => candidate.textContent?.trim() === '商品リストを編集',
@@ -66,7 +91,6 @@ describe('home and about pages', () => {
     )
     act(() => aboutButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(onOpenAbout).toHaveBeenCalledTimes(1)
-    expect(onStartCreate).not.toHaveBeenCalled()
   })
 
   it('explains beta, capability URL, safety, feature, and data boundaries', () => {
