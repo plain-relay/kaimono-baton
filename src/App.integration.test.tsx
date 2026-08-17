@@ -128,7 +128,7 @@ describe('mounted App hash routing', () => {
     await renderApp()
     expect(container.querySelector('h1')?.textContent).toBe('買いものバトン')
 
-    await clickAndFlush(button('依頼を作る'))
+    await clickAndFlush(button('＋ 新しい買いものリストを作る'))
     if (window.location.hash !== '#/create') {
       await changeHash('/create')
     }
@@ -143,6 +143,25 @@ describe('mounted App hash routing', () => {
       top: 0,
       behavior: 'auto',
     })
+  })
+
+  it('routes the secondary Home actions to products and about', async () => {
+    await renderApp()
+
+    await clickAndFlush(button('商品リストを編集'))
+    expect(window.location.hash).toBe('#/products')
+    await changeHash('/products', true)
+    expect(container.querySelector('h1')?.textContent).toBe(
+      '商品リストを編集',
+    )
+
+    await changeHash('/')
+    await clickAndFlush(button('このアプリについて'))
+    expect(window.location.hash).toBe('#/about')
+    await changeHash('/about', true)
+    expect(container.querySelector('h1')?.textContent).toBe(
+      'このアプリについて',
+    )
   })
 
   it('handles request A/B, invalid/valid, and backward/forward hashchange equivalents', async () => {
