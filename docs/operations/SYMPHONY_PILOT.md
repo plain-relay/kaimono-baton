@@ -58,6 +58,8 @@ An Issue is not executable until the authorized human approves the implementatio
 
 It does not approve merge, Production, external configuration, secrets, migrations, billing, legal publication, or user-data operations.
 
+`codex-ready` is a one-shot execution permit, not a persistent status. A successful run removes it after the Draft PR exists and the branch is pushed. A blocked run also removes it before stopping. Re-adding the label means a human has resolved the blocker or approved another implementation attempt.
+
 ### Merge gate
 
 The existing `AGENTS.md`, `docs/CODEX_WORKFLOW.md`, and `docs/operations/AI_MERGE_APPROVAL.md` remain authoritative. Symphony/Codex must stop at a Draft PR. Independent review and exact-head human merge approval remain separate.
@@ -147,9 +149,15 @@ isolated workspace
         +-- run required checks
         +-- commit and push
         +-- create/update one Draft PR
+        +-- remove codex-ready
+        v
+Issue stays open without dispatch permission
+        |
         v
 human/independent review outside the implementation run
 ```
+
+A blocker follows the same one-shot rule: write the blocker to the Issue, remove `codex-ready`, and stop. The label is only re-added after the blocker is resolved and another implementation attempt is explicitly approved.
 
 ## Failure and stop rules
 
@@ -160,6 +168,7 @@ Stop the pilot and investigate before another autonomous run if any of these occ
 - Production workflow/deploy triggered by the agent;
 - secret, private-op, or user-data access;
 - change outside Issue scope;
+- `codex-ready` remains on an Issue after a successful or blocked handoff;
 - repeated execution after a completed Draft PR without a justified continuation;
 - required validation silently skipped;
 - inability to determine exact base/head;
@@ -174,6 +183,7 @@ Evaluate the pilot after several small real tasks. Success requires:
 
 - zero manual copy/paste between ChatGPT and Codex;
 - no manual Codex start after an approved Issue receives `codex-ready` while Symphony is running;
+- successful and blocked runs both clear `codex-ready` before stopping;
 - exactly one implementation branch/PR per Issue unless a documented rework reset requires otherwise;
 - required validation executed and reported accurately;
 - no main/Production/external-state violation;
