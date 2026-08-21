@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   PilotError,
+  extractAndValidateApproval,
   extractAndValidateSafeTask,
   isPathAllowed,
   isProtectedPath,
+  taskHash,
   validateHandoff,
   validateSafeTask,
 } from './symphony-pilot-host.mjs'
@@ -50,7 +52,7 @@ describe('Symphony safe task boundary', () => {
 
   it('allows only exact or descendant paths inside approved scopes', () => {
     expect(isPathAllowed('src/pages/HomePage.tsx', ['src/pages'])).toBe(true)
-    expect(isPathAllowed('src/pages', ['src/pages'])).toBe(true)
+    expect(isPathAllowed('src/pages', ['src/pages']])).toBe(true)
     expect(isPathAllowed('src/styles.css', ['src/pages'])).toBe(false)
     expect(isPathAllowed('.github/workflows/x.yml', ['.github'])).toBe(false)
   })
@@ -58,6 +60,38 @@ describe('Symphony safe task boundary', () => {
   it('requires a new positive executionId for each authorization', () => {
     expect(() => validateSafeTask({ ...validTask(), executionId: 0 })).toThrow(PilotError)
     expect(validateSafeTask({ ...validTask(), executionId: 2 }).executionId).toBe(2)
+  })
+})
+
+describe('Symphony approval binding', () => {
+  it('binds an authorization comment to the exact validated task hash', () => {
+    const task = validTask()
+    const body = `Approved by trusted operator.\n<!-- symphony-approval:v1 -->\n${JSON.stringify({
+      schemaVersion: 1,
+      executionId: task.executionId,
+      taskSha256: taskHash(task),
+    })}\n<!-- /symphony-approval -->`
+
+    expect(extractAndValidateApproval(body, task).taskSha256).toBe(taskHash(task))
+    expect(() => extractAndValidateApproval(body, { ...task, scopePaths: ['src/styles.css'] })).toThrow(PilotError)
+  })
+
+  it('rejects stale execution IDs and extra approval fields', () => {
+    const task = validTask()
+    const stale = `<!-- symphony-approval:v1 -->\n${JSON.stringify({
+      schemaVersion: 1,
+      executionId: 2,
+      taskSha256: taskHash(task),
+    })}\n<!-- /symphony-approval -->`
+    expect(() => extractAndValidateApproval(stale, task)).toThrow(PilotError)
+
+    const extra = `<!-- symphony-approval:v1 -->\n${JSON.stringify({
+      schemaVersion: 1,
+      executionId: task.executionId,
+      taskSha256: taskHash(task),
+      note: 'free text',
+    })}\n<!-- /symphony-approval -->`
+    expect(() => extractAndValidateApproval(extra, task)).toThrow(PilotError)
   })
 })
 
