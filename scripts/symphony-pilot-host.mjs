@@ -9,11 +9,13 @@ import { pathToFileURL } from 'node:url'
 
 const REPOSITORY = 'plain-relay/kaimono-baton'
 const REPOSITORY_OWNER = 'plain-relay'
-const REPOSITORY_NAME = 'kaimono-baton'
 const REPOSITORY_URL = 'https://github.com/plain-relay/kaimono-baton.git'
 const DISPATCH_LABEL = 'codex-ready'
 const BLOCK_START = '<!-- symphony-safe-task:v1 -->'
 const BLOCK_END = '<!-- /symphony-safe-task -->'
+const APPROVAL_BLOCK_START = '<!-- symphony-approval:v1 -->'
+const APPROVAL_BLOCK_END = '<!-- /symphony-approval -->'
+const APPROVER_LOGINS = new Set([REPOSITORY_OWNER])
 
 const OPERATIONS = new Set([
   'update-docs-to-existing-contract',
@@ -54,6 +56,7 @@ const TASK_KEYS = new Set([
   'acceptanceChecks',
   'risk',
 ])
+const APPROVAL_KEYS = new Set(['schemaVersion', 'executionId', 'taskSha256'])
 const HANDOFF_READY_KEYS = new Set(['schemaVersion', 'status', 'checks'])
 const HANDOFF_BLOCKED_KEYS = new Set(['schemaVersion', 'status', 'blockerCode'])
 const PREPARED_TASK_KEYS = new Set([
@@ -198,6 +201,34 @@ export function validateSafeTask(value) {
   })
 }
 
+export function taskHash(task) {
+  const validated = validateSafeTask(task)
+  return crypto.createHash('sha256').update(JSON.stringify(validated)).digest('hex')
+}
+
+export function extractAndValidateApproval(commentBody, task) {
+  assert(typeof commentBody === 'string' && commentBody.length <= 20_000, 'invalid-approval-comment')
+  const start = commentBody.indexOf(APPROVAL_BLOCK_START)
+  const end = commentBody.indexOf(APPROVAL_BLOCK_END)
+  assert(start >= 0 && end > start, 'missing-approval-block')
+  assert(commentBody.indexOf(APPROVAL_BLOCK_START, start + APPROVAL_BLOCK_START.length) === -1, 'duplicate-approval-block')
+  assert(commentBody.indexOf(APPROVAL_BLOCK_END, end + APPROVAL_BLOCK_END.length) === -1, 'duplicate-approval-block')
+  const raw = commentBody.slice(start + APPROVAL_BLOCK_START.length, end).trim()
+  assert(raw.length > 1 && raw.length <= 1_024, 'invalid-approval-size')
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new PilotError('invalid-approval-json')
+  }
+  exactKeys(parsed, APPROVAL_KEYS, 'invalid-approval-schema')
+  assert(parsed.schemaVersion === 1, 'invalid-approval-version')
+  assert(parsed.executionId === task.executionId, 'approval-execution-mismatch')
+  assert(typeof parsed.taskSha256 === 'string' && /^[0-9a-f]{64}$/.test(parsed.taskSha256), 'invalid-approval-hash')
+  assert(parsed.taskSha256 === taskHash(task), 'approval-task-hash-mismatch')
+  return parsed
+}
+
 export function validateHandoff(value, requiredChecks = []) {
   assert(value && typeof value === 'object' && !Array.isArray(value), 'invalid-handoff')
   assert(value.schemaVersion === 1, 'invalid-handoff-version')
@@ -228,10 +259,6 @@ function validatePreparedTask(value) {
   const task = validateSafeTask(value.task)
   assert(task.executionId === value.executionId, 'invalid-prepared-task')
   return { ...value, task }
-}
-
-function stableTaskHash(task) {
-  return crypto.createHash('sha256').update(JSON.stringify(task)).digest('hex')
 }
 
 function fileHash(filePath) {
@@ -357,9 +384,48 @@ async function fetchIssue(issueNumber) {
     throw new PilotError('github-issue-payload-invalid')
   }
   assert(issue.state === 'open' && !issue.pull_request, 'issue-not-dispatchable')
+  assert(issue.user?.login === REPOSITORY_OWNER, 'untrusted-issue-author')
   const labels = (issue.labels || []).map((label) => typeof label === 'string' ? label : label.name).filter(Boolean)
   assert(labels.some((label) => label.toLowerCase() === DISPATCH_LABEL), 'dispatch-label-missing')
   return issue
+}
+
+async function fetchIssueComments(issueNumber) {
+  const comments = []
+  for (let page = 1; page <= 10; page += 1) {
+    let response
+    try {
+      response = await github(`/repos/${REPOSITORY}/issues/${issueNumber}/comments?per_page=100&page=${page}`)
+    } catch {
+      throw new PilotError('github-comments-fetch-failed')
+    }
+    assert(response.ok, `github-comments-fetch-status-${response.status}`)
+    let payload
+    try {
+      payload = await response.json()
+    } catch {
+      throw new PilotError('github-comments-payload-invalid')
+    }
+    assert(Array.isArray(payload), 'github-comments-payload-invalid')
+    comments.push(...payload)
+    if (payload.length < 100) return comments
+  }
+  throw new PilotError('approval-comment-limit-exceeded')
+}
+
+async function verifyApproval(issueNumber, task) {
+  const comments = await fetchIssueComments(issueNumber)
+  const approved = comments.some((comment) => {
+    if (!APPROVER_LOGINS.has(comment.user?.login)) return false
+    if (typeof comment.body !== 'string' || !comment.body.includes(APPROVAL_BLOCK_START)) return false
+    try {
+      extractAndValidateApproval(comment.body, task)
+      return true
+    } catch {
+      return false
+    }
+  })
+  assert(approved, 'matching-trusted-approval-missing')
 }
 
 async function removeDispatchLabel(issueNumber) {
@@ -378,7 +444,7 @@ async function postDeterministicBlocker(issueNumber, executionId, blockerCode) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        body: `Symphony pilot execution ${executionId} stopped with blocker code \`${blockerCode}\`. Re-authorize only after resolving the blocker and incrementing \`executionId\` in the validated safe-task block.`,
+        body: `Symphony pilot execution ${executionId} stopped with blocker code \`${blockerCode}\`. Re-authorize only after resolving the blocker, incrementing \`executionId\`, and recording a matching trusted approval hash.`,
       }),
     })
   } catch {
@@ -410,7 +476,8 @@ async function prepare(cwd) {
   const issueNumber = deriveIssueNumber(cwd)
   const issue = await fetchIssue(issueNumber)
   const task = extractAndValidateSafeTask(issue.body ?? '')
-  const taskHash = stableTaskHash(task)
+  await verifyApproval(issueNumber, task)
+  const currentTaskHash = taskHash(task)
   const branchName = `codex/gh-${issueNumber}`
   const existing = readPersistentState(issueNumber)
 
@@ -466,12 +533,12 @@ async function prepare(cwd) {
     schemaVersion: 1,
     state: 'claimed',
     executionId: task.executionId,
-    taskHash,
+    taskHash: currentTaskHash,
     branchName,
     baseSha,
     gitConfigHash: gitConfigHash(cwd),
   })
-  console.log(`[symphony-pilot] claimed validated execution ${task.executionId} for GH-${issueNumber}`)
+  console.log(`[symphony-pilot] claimed approved execution ${task.executionId} for GH-${issueNumber}`)
 }
 
 function collectChangedPaths(cwd) {
@@ -499,7 +566,7 @@ function deterministicPrBody({ issueNumber, executionId, baseSha, headSha, risk,
     '',
     '## Purpose',
     '',
-    `Implements the host-validated AI-safe task for Issue #${issueNumber}. Raw Issue title/body was not supplied to Codex.`,
+    `Implements the host-validated, trusted-approval-bound AI-safe task for Issue #${issueNumber}. Raw Issue title/body was not supplied to Codex.`,
     '',
     '## Changed files',
     '',
@@ -543,6 +610,7 @@ function deterministicPrBody({ issueNumber, executionId, baseSha, headSha, risk,
     '- [x] No Production deploy or Production workflow operation was performed.',
     '- [x] No Cloudflare, DNS, Environment, Secret, Variable, billing, migration, customer communication, or user-data operation was performed.',
     '- [x] Raw Issue text was handled only by the deterministic host parser; Codex received only the validated allowlist payload.',
+    '- [x] The executed task hash matched a structured approval comment authored by the trusted approver.',
     '- [x] Codex received no tracker credential and no GitHub write tool.',
     '- [x] This PR remains Draft; merge and Production are separate human gates.',
     '',
@@ -657,7 +725,7 @@ async function finalize(cwd, { recovery = false } = {}) {
     assert(fs.existsSync(taskPath), 'safe-task-missing')
     prepared = validatePreparedTask(JSON.parse(fs.readFileSync(taskPath, 'utf8')))
     assert(prepared.executionId === state.executionId, 'execution-state-mismatch')
-    assert(stableTaskHash(prepared.task) === state.taskHash, 'safe-task-integrity-failed')
+    assert(taskHash(prepared.task) === state.taskHash, 'safe-task-integrity-failed')
     assert(prepared.baseSha === state.baseSha && prepared.branchName === state.branchName, 'prepared-state-mismatch')
     assert(gitConfigHash(cwd) === state.gitConfigHash, 'git-config-changed')
     assertExpectedRemote(cwd)
