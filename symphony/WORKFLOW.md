@@ -17,6 +17,20 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 https://github.com/plain-relay/kaimono-baton.git .
+    cat > .git/hooks/pre-push <<'HOOK'
+    #!/bin/sh
+    while read local_ref local_sha remote_ref remote_sha; do
+      case "$remote_ref" in
+        refs/heads/codex/gh-*) ;;
+        *)
+          echo "Symphony pilot: push blocked for $remote_ref; only refs/heads/codex/gh-* is allowed." >&2
+          exit 1
+          ;;
+      esac
+    done
+    exit 0
+    HOOK
+    chmod +x .git/hooks/pre-push
 agent:
   max_concurrent_agents: 1
   max_turns: 4
@@ -56,10 +70,11 @@ Mandatory repository contract:
 5. Do not access private operational repositories, Secrets, private ops data, or user data.
 
 Execution rules:
-- Create one dedicated branch for this Issue from current `origin/main`. Use `codex/gh-{{ issue.id }}-<short-slug>` when a fresh branch is required.
+- Always create or reuse one Issue branch named `codex/gh-{{ issue.id }}-<short-slug>` from current `origin/main`. The workspace pre-push hook rejects pushes to every other remote branch, including `main`.
 - Before editing, search for an existing open PR or reusable in-progress branch for this Issue. Do not create duplicate PRs.
 - Keep changes strictly inside the Issue scope. If the requested work requires expanding scope or a prohibited external operation, stop and report the blocker on the Issue.
 - Never push directly to `main` and never force-push `main`.
+- Never bypass, disable, rewrite, or remove the workspace pre-push hook.
 - Never merge, enable auto-merge, mark a Draft PR ready, deploy Production, run a Production workflow, change GitHub Secrets/Variables/Environments, change Cloudflare/DNS/billing, or perform user-data operations.
 - Do not add dependencies, workflows, or external services unless the Issue explicitly authorizes them.
 
@@ -77,7 +92,7 @@ Validation:
 
 Handoff:
 1. Commit only scoped files.
-2. Push the Issue branch using the repository's existing Git authentication.
+2. Push only the Issue branch using the repository's existing Git authentication.
 3. Use Symphony's host-authenticated `github_api` tool to find an existing PR for the Issue branch. Open a new Draft PR targeting `main` only when no reusable open PR exists; otherwise update the existing Draft PR. Do not depend on a GitHub token being present in the Codex child environment.
 4. Satisfy `.github/pull_request_template.md` and include exact base/head SHAs, changed files, checks/results, risk classification, rollback, external-state impact, data-boundary confirmation, and required independent-review method.
 5. Verify exactly one Draft PR exists and the intended branch is pushed.
