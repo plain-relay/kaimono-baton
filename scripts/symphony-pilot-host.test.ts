@@ -52,7 +52,7 @@ describe('Symphony safe task boundary', () => {
 
   it('allows only exact or descendant paths inside approved scopes', () => {
     expect(isPathAllowed('src/pages/HomePage.tsx', ['src/pages'])).toBe(true)
-    expect(isPathAllowed('src/pages', ['src/pages']])).toBe(true)
+    expect(isPathAllowed('src/pages', ['src/pages'])).toBe(true)
     expect(isPathAllowed('src/styles.css', ['src/pages'])).toBe(false)
     expect(isPathAllowed('.github/workflows/x.yml', ['.github'])).toBe(false)
   })
