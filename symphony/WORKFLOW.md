@@ -80,7 +80,12 @@ Handoff:
 2. Push the Issue branch using the repository's existing Git authentication.
 3. Open or update exactly one Draft PR targeting `main` and satisfy `.github/pull_request_template.md`.
 4. Include exact base/head SHAs, changed files, checks/results, risk classification, rollback, external-state impact, data-boundary confirmation, and required independent-review method.
-5. Do not merge the PR.
-6. Leave the Issue open. The human-review and merge gates are handled outside this implementation run.
+5. Verify the Draft PR exists and the intended branch is pushed.
+6. Use Symphony's `github_api` tool to remove the `codex-ready` label from this Issue. This removal is mandatory successful-handoff cleanup and prevents automatic redispatch while the Issue remains open.
+7. Do not merge the PR. Leave the Issue open for CI, independent review, human merge approval, and any explicitly approved rework outside this run.
 
-If blocked by missing authentication, unavailable tools, an unsafe request, or a scope conflict, do not weaken these rules. Record a concise blocker on the Issue and stop.
+Blocked handoff:
+- If blocked by missing authentication, unavailable tools, an unsafe request, a scope conflict, or another true external blocker, do not weaken these rules.
+- Record a concise blocker on the Issue using `github_api`.
+- Remove `codex-ready` from the Issue using `github_api` before stopping so the same blocked task is not automatically redispatched.
+- A human may re-add `codex-ready` only after the blocker is resolved and implementation is explicitly approved again.
