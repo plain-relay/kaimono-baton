@@ -39,10 +39,17 @@ Required:
 3. Symphony Elixir reference implementation or its supported self-contained Linux/macOS binary.
 4. A fine-grained GitHub token exported as `GITHUB_TOKEN`, restricted to `plain-relay/kaimono-baton`.
 5. On Windows, WSL2/Linux for the pilot because upstream self-contained Symphony release targets are Linux/macOS rather than native Windows.
+6. A server-side GitHub rule for `main` that prevents unattended direct pushes and requires the normal PR path before the first unattended live dispatch.
 
 For the fine-grained GitHub token, start with only the selected Kaimono Baton repository and the repository permissions needed for this pilot: metadata read, Issues read/write, and Pull requests read/write. Do not grant Actions, Administration, Environments, Secrets, Variables, Pages, or other unrelated write permissions. Git push authentication remains the developer machine's existing Git authentication; do not embed the Symphony token into the Git remote URL.
 
 Do not commit tokens, Codex credentials, SSH private keys, `.env` files containing credentials, or generated Symphony workspace contents.
+
+### Branch-push defense in depth
+
+The checked-in Symphony workflow installs a workspace-local Git `pre-push` hook immediately after cloning. That hook permits pushes only to remote branches matching `refs/heads/codex/gh-*` and rejects `main` and every other branch. Codex is explicitly forbidden from bypassing, changing, or removing the hook.
+
+This local hook is defense in depth, not a substitute for GitHub-side enforcement. The current repository API representation does not provide enough evidence to treat server-side direct-push blocking as an established safety boundary for this pilot. Before the first unattended live task, verify in GitHub repository settings that a Ruleset or branch-protection rule targeting `main` requires the normal PR path and blocks direct pushes for the credentials used by the developer machine. Do not weaken that rule to make Symphony work.
 
 ## Approval model
 
@@ -137,17 +144,17 @@ approved GitHub Issue
      Symphony
         |
         v
-isolated workspace
+isolated workspace + restricted pre-push hook
         |
         v
       Codex
         |
         +-- read repository contract
         +-- inspect current main
-        +-- create Issue branch
+        +-- create/reuse codex/gh-* Issue branch
         +-- implement scoped change
         +-- run required checks
-        +-- commit and push
+        +-- push only the allowed Issue branch
         +-- create/update one Draft PR
         +-- remove codex-ready
         v
@@ -164,6 +171,7 @@ A blocker follows the same one-shot rule: write the blocker to the Issue, remove
 Stop the pilot and investigate before another autonomous run if any of these occur:
 
 - direct change to `main`;
+- workspace pre-push hook is absent, bypassed, or modified by the agent;
 - duplicate PR for one Issue;
 - Production workflow/deploy triggered by the agent;
 - secret, private-op, or user-data access;
@@ -185,6 +193,7 @@ Evaluate the pilot after several small real tasks. Success requires:
 - no manual Codex start after an approved Issue receives `codex-ready` while Symphony is running;
 - successful and blocked runs both clear `codex-ready` before stopping;
 - exactly one implementation branch/PR per Issue unless a documented rework reset requires otherwise;
+- all remote pushes from Symphony workspaces target only the expected `codex/gh-*` Issue branch;
 - required validation executed and reported accurately;
 - no main/Production/external-state violation;
 - ChatGPT can inspect the resulting Issue/PR/CI directly from GitHub without pasted Codex output;
