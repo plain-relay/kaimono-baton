@@ -716,8 +716,11 @@ async function finalize(cwd, { recovery = false } = {}) {
     console.log(`[symphony-pilot] Draft PR #${prNumber} handed off for GH-${issueNumber}`)
   } catch (error) {
     const code = error instanceof PilotError ? error.code : 'other'
-    if (prepared && state?.state !== 'completed') {
-      await blockExecution(cwd, issueNumber, prepared, readPersistentState(issueNumber) ?? state, BLOCKER_CODES.has(code) ? code : 'repository-state-conflict')
+    const latestState = readPersistentState(issueNumber)
+    if (latestState?.state === 'finalizing' && latestState.headSha) {
+      console.error(`[symphony-pilot] finalization for GH-${issueNumber} remains pending and will be retried host-side`)
+    } else if (prepared && latestState?.state !== 'completed') {
+      await blockExecution(cwd, issueNumber, prepared, latestState ?? state, BLOCKER_CODES.has(code) ? code : 'repository-state-conflict')
     }
     if (!recovery) throw error instanceof PilotError ? error : new PilotError('finalize-failed')
     throw error instanceof PilotError ? error : new PilotError('finalize-recovery-failed')
