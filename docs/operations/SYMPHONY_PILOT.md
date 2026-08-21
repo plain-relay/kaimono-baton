@@ -30,15 +30,17 @@ The version-controlled workflow is `symphony/WORKFLOW.md`.
 
 ## Required local components
 
-Run Symphony only on a trusted developer machine. The reference implementation is an engineering preview and must not be exposed as a public service.
+Run Symphony only on a trusted developer machine. The upstream Elixir reference implementation is prototype software for evaluation and must not be exposed as a public service.
 
 Required:
 
 1. Git and repository push authentication already suitable for normal development.
-2. Codex CLI installed and signed into the same ChatGPT account used for Codex access.
+2. Codex CLI installed and signed into the ChatGPT account used for Codex access. The pilot does not require an `OPENAI_API_KEY`.
 3. Symphony Elixir reference implementation or its supported self-contained Linux/macOS binary.
-4. A fine-grained GitHub token exported as `GITHUB_TOKEN`, restricted to this repository and to the minimum Issue/PR metadata operations required by the pilot.
-5. On Windows, use WSL2/Linux for the pilot because the upstream Symphony self-contained release targets are Linux/macOS rather than native Windows.
+4. A fine-grained GitHub token exported as `GITHUB_TOKEN`, restricted to `plain-relay/kaimono-baton`.
+5. On Windows, WSL2/Linux for the pilot because upstream self-contained Symphony release targets are Linux/macOS rather than native Windows.
+
+For the fine-grained GitHub token, start with only the selected Kaimono Baton repository and the repository permissions needed for this pilot: metadata read, Issues read/write, and Pull requests read/write. Do not grant Actions, Administration, Environments, Secrets, Variables, Pages, or other unrelated write permissions. Git push authentication remains the developer machine's existing Git authentication; do not embed the Symphony token into the Git remote URL.
 
 Do not commit tokens, Codex credentials, SSH private keys, `.env` files containing credentials, or generated Symphony workspace contents.
 
@@ -60,22 +62,51 @@ It does not approve merge, Production, external configuration, secrets, migratio
 
 The existing `AGENTS.md`, `docs/CODEX_WORKFLOW.md`, and `docs/operations/AI_MERGE_APPROVAL.md` remain authoritative. Symphony/Codex must stop at a Draft PR. Independent review and exact-head human merge approval remain separate.
 
-## Local start procedure
+## Local installation and start
 
-From a trusted local clone of this repository:
+Use the current upstream `openai/symphony` release or build the current Elixir reference implementation. Do not copy a binary into this repository.
+
+Upstream source-build shape:
+
+```sh
+git clone https://github.com/openai/symphony.git ~/code/openai-symphony
+cd ~/code/openai-symphony/elixir
+mise trust
+mise install
+mise exec -- mix setup
+mise exec -- mix build
+```
+
+A supported self-contained Symphony release binary can be used instead and avoids installing Elixir/Erlang. It still requires `codex`, `git`, and tracker credentials on the machine.
+
+Before the first run, from a trusted local clone of Kaimono Baton:
 
 ```sh
 git switch main
 git pull --ff-only origin main
 codex --version
-symphony symphony/WORKFLOW.md
+git ls-remote --exit-code https://github.com/plain-relay/kaimono-baton.git refs/heads/main
 ```
 
-If the installed executable uses a different documented invocation form, use the current upstream Symphony README rather than changing repository policy to match an obsolete CLI example.
+Also confirm that normal branch push authentication works from the same WSL/Linux/macOS environment. Do not validate it by pushing to `main`.
 
-Before starting Symphony, export `GITHUB_TOKEN` in the local shell. Keep the token out of shell history where practical and do not write it into `WORKFLOW.md`.
+Export `GITHUB_TOKEN` in the local shell without writing it into this repository. Then start the built reference implementation with the repository workflow, for example:
 
-The process polls every 30 seconds. It can be stopped by terminating the local Symphony process. Stopping the process is the pilot-wide kill switch.
+```sh
+cd /path/to/kaimono-baton
+/path/to/openai-symphony/elixir/bin/symphony ./symphony/WORKFLOW.md
+```
+
+For a self-contained release binary:
+
+```sh
+cd /path/to/kaimono-baton
+/path/to/symphony-release-binary ./symphony/WORKFLOW.md
+```
+
+Use the current upstream Symphony README if the installed release changes its executable name or invocation. The process polls every 30 seconds. Terminating the local Symphony process is the pilot-wide kill switch.
+
+The pilot intentionally does not start the optional web dashboard/server.
 
 ## Issue requirements
 
@@ -91,6 +122,8 @@ Only apply `codex-ready` when the Issue body contains, at minimum:
 - explicit confirmation that Production/external operations are not authorized unless separately specified for human execution.
 
 For the first pilot run, use a small, reversible, non-Production task. Do not use privacy/security/authentication/migration/billing/Secrets changes as the first run.
+
+The `codex-ready` label exists in this repository and is the sole Symphony dispatch label for this pilot. Do not place it on infrastructure/setup Issues that should not be executed by Symphony.
 
 ## Expected autonomous flow
 
