@@ -11,44 +11,54 @@ The design deliberately treats Symphony as a scheduler/runner, not as a trusted 
 ## Security architecture
 
 ```text
-ChatGPT -> GitHub Issue -> human Gate A -> codex-ready
-                                      |
-                                      v
-                              Symphony scheduler
-                                      |
-                              trusted before_run
-                                      |
-                       deterministic safe-task validator
-                                      |
-                    persistent host claim outside workspace
-                                      |
-                                      v
-                               Codex app-server
-                          workspace-write / network off
-                         no GitHub provider-native tool
-                                      |
-                           local edits + local checks
-                                      |
-                           .symphony/handoff.json
-                                      |
-                              trusted after_run
-                                      |
-                         scope + Git integrity checks
-                                      |
-                        host commit / host-only push
-                                      |
-                            Draft PR + label cleanup
-                                      |
-                          independent review + CI
-                                      |
-                             human Gate B: merge
-                                      |
-                         human Gate C: Production
+ChatGPT -> owner-authored GitHub Issue
+              |
+              | human Gate A approves exact safe task
+              v
+      trusted approval-hash comment
+              |
+              +--> codex-ready
+                      |
+                      v
+              Symphony scheduler
+                      |
+              trusted before_run
+                      |
+          task hash == approval hash
+                      |
+        deterministic safe-task validator
+                      |
+      persistent host claim outside workspace
+                      |
+                      v
+               Codex app-server
+          workspace-write / network off
+         no GitHub provider-native tool
+                      |
+           local edits + local checks
+                      |
+           .symphony/handoff.json
+                      |
+              trusted after_run
+                      |
+         scope + Git integrity checks
+                      |
+        host commit / host-only push
+                      |
+            Draft PR + label cleanup
+                      |
+          independent review + CI
+                      |
+             human Gate B: merge
+                      |
+         human Gate C: Production
 ```
 
 The trust boundary is intentional:
 
 - Symphony may read the raw public GitHub Issue because it is the tracker host.
+- Executable pilot Issues must be authored by the repository owner account used by this operating model.
+- Gate A is bound to the exact validated task hash by a structured approval comment authored by the trusted approver before `codex-ready` is accepted.
 - `scripts/symphony-pilot-host.mjs` is executed from a trusted control checkout outside the agent workspace.
 - The host extracts only the delimited allowlist payload and writes `.symphony/task.json`.
 - The Codex prompt does not interpolate Issue title, body, URL, comments, or labels.
@@ -57,7 +67,7 @@ The trust boundary is intentional:
 - Codex must not stage, commit, push, create PRs, mutate Issues, or change Git state.
 - GitHub write credentials are used only by the trusted host finalizer after the Codex turn.
 
-This addresses the two independent-review findings on the original PR design: raw Issue text no longer reaches Codex, and durable host state prevents repeated Codex dispatch when GitHub label cleanup fails.
+This addresses the original independent-review findings and an additional approval-integrity risk: raw Issue text no longer reaches Codex, durable host state prevents repeated Codex dispatch when GitHub label cleanup fails, and Issue-body edits after human approval cannot silently change the executable task because the approval hash must still match.
 
 ## Fixed upstream Symphony revision
 
@@ -176,9 +186,17 @@ Stopping the Symphony process is the pilot-wide kill switch. The optional dashbo
 
 ## Gate A: executable Issue contract
 
-`codex-ready` means only:
+`codex-ready` is necessary but is not sufficient by itself. An execution is authorized only when all of the following are true:
 
-> The exact validated safe-task execution on this Issue may be attempted once by Codex and handed back as a Draft PR.
+1. the Issue is open and authored by the trusted repository owner account;
+2. it contains exactly one valid AI-safe task block;
+3. a trusted approver comment contains the same `executionId` and SHA-256 of the exact canonical validated task;
+4. the Issue has `codex-ready`;
+5. persistent host state does not show that execution as already claimed, completed, or blocked.
+
+The meaning of Gate A is only:
+
+> The exact validated safe-task execution whose hash was approved may be attempted once by Codex and handed back as a Draft PR.
 
 It does not approve merge, Production, deployment, migrations, Secrets, billing, DNS, Cloudflare, or user-data operations.
 
@@ -204,7 +222,27 @@ The allowlist deliberately contains no arbitrary task prose. Product names, cond
 
 The task must be implementable from public repository contracts identified by `referencePaths`, `scopePaths`, and optional `symbols`. If a requirement cannot be represented safely by this structure, it is not eligible for this unattended pilot.
 
-`executionId` is a one-shot authorization sequence. Start at `1`. If an execution is blocked and a human explicitly approves another attempt, update the safe task and increment `executionId` before re-adding `codex-ready`. Re-adding the label without a larger `executionId` does not authorize another Codex run.
+### Trusted approval-hash comment
+
+After the human approves the exact safe task, the GitHub-connected trusted operator records a machine-readable comment and only then adds `codex-ready`:
+
+```text
+<!-- symphony-approval:v1 -->
+{
+  "schemaVersion": 1,
+  "executionId": 1,
+  "taskSha256": "<64 lowercase hex SHA-256 produced from the canonical validated task>"
+}
+<!-- /symphony-approval -->
+```
+
+For this pilot, the host accepts approval blocks only from the configured trusted repository-owner login. The approval block has no free-text field. Human-readable explanation may exist outside the block, but the host ignores it.
+
+The operator must compute `taskSha256` from the same canonical validated object shape used by `taskHash()` in `scripts/symphony-pilot-host.mjs`. In the normal operating model ChatGPT creates the Issue, receives the human's approval, computes/posts this structured hash comment through the connected GitHub account, and applies `codex-ready`; the human does not manually copy the hash.
+
+If the Issue task block is edited after approval, its hash changes and the host refuses dispatch until a new human approval results in a matching trusted approval comment. A label left in place is not enough to bypass this check.
+
+`executionId` is a one-shot authorization sequence. Start at `1`. If an execution is blocked and a human explicitly approves another attempt, update the safe task, increment `executionId`, record a new matching approval hash comment, and then re-add `codex-ready`. Re-adding the label without a larger `executionId` and matching hash does not authorize another Codex run.
 
 After a Draft PR exists, do not reuse the Issue for a second autonomous implementation execution; handle review/rework through the normal reviewed PR workflow or a new approved Issue.
 
@@ -213,16 +251,18 @@ After a Draft PR exists, do not reuse the Issue for a second autonomous implemen
 Before Codex launches, the trusted host:
 
 1. fetches the exact Issue through the GitHub API;
-2. verifies it is open and still has `codex-ready`;
+2. verifies it is open, authored by the trusted repository owner, and still has `codex-ready`;
 3. extracts and strictly validates the one safe-task block;
-4. checks persistent host state for the same Issue/execution;
-5. refuses stale, completed, interrupted, or already-claimed executions;
-6. fetches current `origin/main` and creates deterministic local branch `codex/gh-<issue-number>`;
-7. rejects an unexpected pre-existing remote branch or open PR;
-8. verifies all `referencePaths` exist;
-9. runs `npm ci` before agent execution with a sanitized child environment that does not receive `GITHUB_TOKEN`;
-10. writes `.symphony/task.json`;
-11. atomically persists the execution claim outside the workspace.
+4. fetches Issue comments host-side and requires a matching structured approval block from the trusted approver;
+5. compares the approved task SHA-256 and `executionId` to the exact currently validated task;
+6. checks persistent host state for the same Issue/execution;
+7. refuses stale, completed, interrupted, or already-claimed executions;
+8. fetches current `origin/main` and creates deterministic local branch `codex/gh-<issue-number>`;
+9. rejects an unexpected pre-existing remote branch or open PR;
+10. verifies all `referencePaths` exist;
+11. runs `npm ci` before agent execution with a sanitized child environment that does not receive `GITHUB_TOKEN`;
+12. writes `.symphony/task.json`;
+13. atomically persists the approved task hash and execution claim outside the workspace.
 
 A previous interrupted claimed execution is converted to `blocked` instead of being silently re-run. This intentionally favors bounded Codex usage over automatic retry.
 
@@ -234,7 +274,7 @@ Codex receives only:
 - `.symphony/task.json`;
 - allowed public repository content.
 
-Codex does not receive raw Issue prose through the prompt and cannot call the GitHub provider tool. Network access is disabled.
+Codex does not receive raw Issue prose or approval comments through the prompt and cannot call the GitHub provider tool. Network access is disabled.
 
 Codex may edit only task `scopePaths`, run only selected validation commands, and write `.symphony/handoff.json`.
 
@@ -244,7 +284,7 @@ It may not stage/commit/push, modify Git configuration/hooks/refs, change contro
 
 After the one Codex turn, the trusted host treats agent output as untrusted until validated. It:
 
-1. verifies `.symphony/task.json` still hashes to the persistent claim;
+1. verifies `.symphony/task.json` still hashes to the persistent approved claim;
 2. verifies `.git/config` is unchanged and `origin` is the expected public repository URL;
 3. requires a schema-valid handoff and every authorized acceptance check to be reported `pass`;
 4. requires Codex to have created no commit and staged no file;
@@ -253,10 +293,11 @@ After the one Codex turn, the trusted host treats agent output as untrusted unti
 7. reruns `git diff --check` itself;
 8. persists `finalizing` before any remote mutation;
 9. stages only the validated changed paths and creates the commit as the host;
-10. pushes only `refs/heads/codex/gh-<issue-number>` using an ephemeral GitHub authorization header available only to the Git subprocess;
-11. creates or updates exactly one Draft PR targeting `main`;
-12. persists `completed` before attempting label cleanup;
-13. removes `codex-ready`.
+10. persists the host-created head SHA for recovery;
+11. pushes only `refs/heads/codex/gh-<issue-number>` using an ephemeral GitHub authorization header available only to the Git subprocess;
+12. creates or updates exactly one Draft PR targeting `main`;
+13. persists `completed` before attempting label cleanup;
+14. removes `codex-ready`.
 
 The host never executes agent-modified application code after it starts using GitHub credentials. Test/build execution happens during the no-network Codex phase, and normal GitHub PR CI remains the independent remote verification before merge.
 
@@ -275,7 +316,9 @@ claimed -> finalizing -> completed
 
 If GitHub label cleanup fails after PR creation, `completed` remains durable. A later poll may invoke the host pre-run hook, but it removes/repairs the stale label and refuses to start Codex again.
 
-If a process dies after `finalizing`, the next pre-run attempts idempotent finalization recovery and does not launch another agent turn.
+If remote push/PR creation fails after the host has created and durably recorded the implementation commit, the state remains `finalizing`. The next poll invokes host-only finalization recovery. It does not start another Codex turn.
+
+If a process dies while merely `claimed`, the execution is treated as interrupted and becomes `blocked`; another agent turn requires a larger explicitly approved `executionId` and a new matching approval hash.
 
 No database, queue, hosted control plane, or cloud VM is required.
 
@@ -309,6 +352,7 @@ The first live run must verify:
 - no manual Codex start after Gate A;
 - one Codex invocation only;
 - only AI-safe structured task input reaches Codex;
+- an edit to the safe-task block after approval causes hash mismatch and prevents dispatch;
 - no agent GitHub tool or network access;
 - host-only commit/push/PR creation;
 - exactly one Draft PR;
@@ -320,19 +364,21 @@ The first live run must verify:
 
 Stop the pilot and investigate before approving another execution if any of these occur:
 
-- raw Issue text appears in a Codex prompt/session;
+- raw Issue text or approval comments appear in a Codex prompt/session;
+- an Issue not authored by the trusted owner becomes executable;
+- the executed task hash does not match the human-approved hash;
 - `github_api` or another tracker-write tool is exposed to Codex;
 - Codex network access succeeds;
 - `GITHUB_TOKEN` or another host credential appears in the Codex environment/output/workspace;
 - Codex stages, commits, pushes, changes Git config, or changes protected paths;
 - the host pushes any branch other than `codex/gh-*`;
 - duplicate PRs appear for one Issue;
-- an Issue execution is redispatched without a larger explicitly approved `executionId`;
+- an Issue execution is redispatched without a larger explicitly approved `executionId` and matching approval hash;
 - a Production/external operation occurs;
 - required validation is skipped or falsely reported;
 - abnormal Codex consumption occurs.
 
-Do not fix a pilot failure by weakening repository policy, broadening the token, turning network on, exposing `github_api`, or raising concurrency/turn count.
+Do not fix a pilot failure by weakening repository policy, broadening the token, turning network on, exposing `github_api`, removing the approval-hash binding, or raising concurrency/turn count.
 
 ## Cost boundary
 
