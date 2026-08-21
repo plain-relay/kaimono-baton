@@ -1,5 +1,4 @@
 diff --git a/elixir/lib/symphony_elixir/github/adapter.ex b/elixir/lib/symphony_elixir/github/adapter.ex
-index 5a77016..4eea9a1 100644
 --- a/elixir/lib/symphony_elixir/github/adapter.ex
 +++ b/elixir/lib/symphony_elixir/github/adapter.ex
 @@ -32,7 +32,7 @@ defmodule SymphonyElixir.GitHub.Adapter do
