@@ -27,6 +27,7 @@ const localEnvironment = Object.freeze([Object.freeze({
   cwd: workspace,
   runtimeWorkspaceRoots: Object.freeze([workspace]),
 })])
+const runtimeWorkspaceRoots = Object.freeze([workspace])
 function hasExactLocalEnvironment(value) {
   return Array.isArray(value) && value.length === 1 &&
     value[0]?.environmentId === 'local' &&
@@ -35,7 +36,11 @@ function hasExactLocalEnvironment(value) {
     value[0].runtimeWorkspaceRoots.length === 1 &&
     value[0].runtimeWorkspaceRoots[0] === workspace
 }
+function hasExactRuntimeWorkspaceRoots(value) {
+  return Array.isArray(value) && value.length === 1 && value[0] === workspace
+}
 if (!hasExactLocalEnvironment(localEnvironment)) fail('local-environment-contract-invalid')
+if (!hasExactRuntimeWorkspaceRoots(runtimeWorkspaceRoots)) fail('runtime-workspace-roots-contract-invalid')
 const controlRoot = requireEnv('SYMPHONY_PILOT_CONTROL_ROOT')
 const pilotHome = requireEnv('SYMPHONY_PILOT_CODEX_HOME')
 const stateRoot = requireEnv('SYMPHONY_PILOT_STATE_DIR')
@@ -263,6 +268,7 @@ async function runAuthenticatedModelTurn(thread) {
     cwd: workspace,
     permissions: PROFILE,
     environments: localEnvironment,
+    runtimeWorkspaceRoots,
     input: [{ type: 'text', text: 'Return exactly PILOT_MODEL_OK. Do not call tools.' }],
   })
   const completed = await waitForNotification('turn/completed', (params) => params?.turn?.id === turn?.turn?.id)
@@ -301,6 +307,7 @@ async function runModelEditTurn(thread) {
     cwd: workspace,
     permissions: PROFILE,
     environments: localEnvironment,
+    runtimeWorkspaceRoots,
     input: [{ type: 'text', text: 'You must modify the workspace file `pilot-fixture.txt`. Use the available command execution tool to replace its entire contents with:\n\nAFTER\n\nDo not merely describe the change. Do not use network access. After making the change, verify the file and respond exactly:\n\nPILOT_EDIT_OK' }],
   })
   const completed = await waitForNotification('turn/completed', (params) => params?.turn?.id === turn?.turn?.id)
@@ -355,12 +362,14 @@ try {
   const thread = await rpc('thread/start', {
     cwd: workspace,
     permissions: PROFILE,
+    runtimeWorkspaceRoots,
     environments: localEnvironment,
     selectedCapabilityRoots: [],
     dynamicTools: [],
     ephemeral: true,
   })
   if (thread?.activePermissionProfile?.id !== PROFILE) fail('active-permission-profile-mismatch')
+  const exactThreadRuntimeWorkspaceRoots = hasExactRuntimeWorkspaceRoots(thread?.runtimeWorkspaceRoots)
   if (configOnly) {
     console.log(`[symphony-pilot-config] PASS profile=${PROFILE} approval=granular-fail-closed codex=0.147.0`)
     if (!pilotHomeInjectionResults.every(Boolean)) process.exitCode = 1
@@ -472,7 +481,7 @@ try {
       results.push(authenticatedModelTurn)
     }
     if (modelEdit) {
-      const exactRuntimeRoots = authenticatedModelTurn && localEnvironmentUsable && hasExactLocalEnvironment(localEnvironment)
+      const exactRuntimeRoots = authenticatedModelTurn && localEnvironmentUsable && hasExactLocalEnvironment(localEnvironment) && exactThreadRuntimeWorkspaceRoots
       reportInvariant('14', 'exact-runtime-workspace-roots', exactRuntimeRoots)
       results.push(localEnvironmentUsable && exactRuntimeRoots)
       results.push(await runInvariant({

@@ -21,7 +21,7 @@ The pinned Symphony patch is `symphony/patches/0001-disable-github-agent-tool.pa
 
 - changes turn metadata title to the identifier only;
 - adds pilot-only named permission-profile selection;
-- sends exactly one explicit local environment on both `thread/start` and `turn/start`: `environmentId: "local"`, `cwd: workspace`, and `runtimeWorkspaceRoots: [workspace]`; it sends `selectedCapabilityRoots: []` and `dynamicTools: []`;
+- sends exactly one explicit local environment on both `thread/start` and `turn/start`: `environmentId: "local"`, `cwd: workspace`, and `runtimeWorkspaceRoots: [workspace]`; it also sets the top-level `runtimeWorkspaceRoots: [workspace]` that materializes the named profile's `:workspace_roots`, and sends `selectedCapabilityRoots: []` and `dynamicTools: []`;
 - verifies `activePermissionProfile.id == "symphony-pilot"` before `turn/start`;
 - fails the pilot on unexpected dynamic-tool interaction;
 - exposes no GitHub tool specification and rejects GitHub tool execution.
@@ -73,7 +73,7 @@ It does not receive the raw Issue title, Issue prose outside the safe task, comm
 
 The durable `SYMPHONY_PILOT_CODEX_HOME` is an auth-only store and must contain exactly one regular non-symlink `auth.json`. Every app-server launch gets a newly created runtime `CODEX_HOME` containing only a copy of that auth file and the SHA-256-attested control-root config. The runtime home is deleted after the app-server exits and is never reused. Any durable `AGENTS.md`, `config.toml`, skill, hook, plugin, MCP, app, connector, marketplace, memory, or other entry makes startup fail before the permit is consumed.
 
-Codex 0.147.0 is explicitly configured with skill instructions and bundled skills disabled, hooks disabled, apps/plugins/connectors/search disabled, no MCP servers, and no orchestrator capability roots. The patched Symphony request selects exactly one built-in `local` environment whose cwd and only runtime workspace root are the host-validated workspace. It does not omit environments, select a default, add a second or remote environment, or send capability roots or dynamic tools; unexpected external interaction fails closed.
+Codex 0.147.0 is explicitly configured with skill instructions and bundled skills disabled, hooks disabled, apps/plugins/connectors/search disabled, no MCP servers, and no orchestrator capability roots. The patched Symphony request selects exactly one built-in `local` environment whose cwd and only environment-native runtime workspace root are the host-validated workspace. Its top-level runtime workspace root is the same exact workspace, which materializes the named profile's `:workspace_roots`. It does not omit environments, select a default, add a second or remote environment, or send capability roots or dynamic tools; unexpected external interaction fails closed.
 
 Codex 0.147.0 applies this named profile:
 

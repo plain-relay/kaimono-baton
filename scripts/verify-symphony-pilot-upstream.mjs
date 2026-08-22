@@ -55,8 +55,9 @@ const appServerTest = fs.readFileSync(path.join(elixirRoot, 'test/symphony_elixi
 if (!adapterSource.includes('def agent_tool_specs, do: []')) fail('github-tool-boundary-missing')
 if (adapterTest.includes('assert [%{"name" => "github_api"}] = binding.tool_specs')) fail('stale-github-tool-test-expectation')
 const localEnvironmentCount = appServerSource.split('"environmentId" => "local"').length - 1
-if (localEnvironmentCount !== 2 || !appServerSource.includes('"runtimeWorkspaceRoots" => [workspace]') || appServerSource.includes('"environments" => []')) fail('local-environment-contract-missing')
-if (!appServerTest.includes('assert thread["params"]["environments"] == expected_environment') || !appServerTest.includes('assert turn["params"]["environments"] == expected_environment')) fail('local-environment-regression-missing')
+const runtimeRootCount = appServerSource.split('"runtimeWorkspaceRoots" => [workspace]').length - 1
+if (localEnvironmentCount !== 2 || runtimeRootCount !== 2 || appServerSource.includes('"environments" => []')) fail('local-environment-contract-missing')
+if (!appServerTest.includes('assert thread["params"]["environments"] == expected_environment') || !appServerTest.includes('assert turn["params"]["environments"] == expected_environment') || !appServerTest.includes('assert thread["params"]["runtimeWorkspaceRoots"] == expected_runtime_workspace_roots') || !appServerTest.includes('assert turn["params"]["runtimeWorkspaceRoots"] == expected_runtime_workspace_roots')) fail('local-environment-regression-missing')
 mix(elixirRoot, ['format', '--check-formatted'], 'upstream-format-check-failed')
 console.log('[symphony-upstream] format-check=PASS')
 mix(elixirRoot, ['test', 'test/symphony_elixir/app_server_test.exs', 'test/symphony_elixir/github_adapter_test.exs'], 'focused-upstream-tests-failed')
