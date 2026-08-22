@@ -56,7 +56,7 @@ if (!adapterSource.includes('def agent_tool_specs, do: []')) fail('github-tool-b
 if (adapterTest.includes('assert [%{"name" => "github_api"}] = binding.tool_specs')) fail('stale-github-tool-test-expectation')
 const localEnvironmentCount = appServerSource.split('"environmentId" => "local"').length - 1
 const runtimeRootCount = appServerSource.split('"runtimeWorkspaceRoots" => [workspace]').length - 1
-if (localEnvironmentCount !== 2 || runtimeRootCount !== 2 || appServerSource.includes('"environments" => []')) fail('local-environment-contract-missing')
+if (localEnvironmentCount !== 2 || runtimeRootCount !== 3 || appServerSource.includes('"environments" => []')) fail('local-environment-contract-missing')
 if (!appServerTest.includes('assert thread["params"]["environments"] == expected_environment') || !appServerTest.includes('assert turn["params"]["environments"] == expected_environment') || !appServerTest.includes('assert thread["params"]["runtimeWorkspaceRoots"] == expected_runtime_workspace_roots') || !appServerTest.includes('assert turn["params"]["runtimeWorkspaceRoots"] == expected_runtime_workspace_roots')) fail('local-environment-regression-missing')
 mix(elixirRoot, ['format', '--check-formatted'], 'upstream-format-check-failed')
 console.log('[symphony-upstream] format-check=PASS')
