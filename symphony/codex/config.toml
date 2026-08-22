@@ -1,0 +1,59 @@
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+approval_policy = { granular = { sandbox_approval = false, rules = false, skill_approval = false, mcp_elicitations = false, request_permissions = false } }
+default_permissions = "symphony-pilot"
+web_search = "disabled"
+check_for_update_on_startup = false
+include_apps_instructions = false
+include_permissions_instructions = true
+include_collaboration_mode_instructions = false
+include_environment_context = false
+
+[skills]
+include_instructions = false
+bundled = { enabled = false }
+
+[orchestrator.skills]
+enabled = false
+
+[orchestrator.mcp]
+enabled = false
+
+[features]
+apps = false
+browser_use = false
+computer_use = false
+connectors = false
+external_migration = false
+hooks = false
+image_generation = false
+in_app_browser = false
+multi_agent = false
+plugins = false
+recommended_plugins = false
+remote_control = false
+remote_plugin = false
+request_permissions = false
+request_permissions_tool = false
+search_tool = false
+skill_search = false
+standalone_web_search = false
+tool_search = false
+web_search = false
+web_search_cached = false
+web_search_request = false
+
+[permissions.symphony-pilot]
+description = "Kaimono Baton unattended pilot: minimal runtime read, workspace write, no network."
+
+[permissions.symphony-pilot.filesystem]
+":minimal" = "read"
+"/pilot-runtime/codex" = "read"
+"/usr/local" = "deny"
+"/usr/src" = "deny"
+
+[permissions.symphony-pilot.filesystem.":workspace_roots"]
+"." = "write"
+
+[permissions.symphony-pilot.network]
+enabled = false
