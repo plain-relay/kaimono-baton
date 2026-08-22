@@ -57,7 +57,7 @@ index ae3db62..62b78a7 100644
        {:ok, turn_id} ->
          session_id = "#{thread_id}-#{turn_id}"
          Logger.info("Codex session started for #{issue_context(issue)} session_id=#{session_id}")
-@@ -314,25 +339,39 @@ defmodule SymphonyElixir.Codex.AppServer do
+@@ -314,25 +339,45 @@ defmodule SymphonyElixir.Codex.AppServer do
    defp start_thread(
           port,
           workspace,
@@ -80,7 +80,13 @@ index ae3db62..62b78a7 100644
 +      "approvalPolicy" => approval_policy,
 +      "permissions" => permission_profile,
 +      "cwd" => workspace,
-+      "environments" => [],
++      "environments" => [
++        %{
++          "environmentId" => "local",
++          "cwd" => workspace,
++          "runtimeWorkspaceRoots" => [workspace]
++        }
++      ],
 +      "selectedCapabilityRoots" => [],
 +      "dynamicTools" => []
 +    }
@@ -108,7 +114,7 @@ index ae3db62..62b78a7 100644
          end
 
        other ->
-@@ -340,23 +379,51 @@ defmodule SymphonyElixir.Codex.AppServer do
+@@ -340,23 +385,57 @@ defmodule SymphonyElixir.Codex.AppServer do
      end
    end
 
@@ -152,7 +158,13 @@ index ae3db62..62b78a7 100644
 +      legacy_params
 +      |> Map.delete("sandboxPolicy")
 +      |> Map.put("permissions", permission_profile)
-+      |> Map.put("environments", [])
++      |> Map.put("environments", [
++        %{
++          "environmentId" => "local",
++          "cwd" => workspace,
++          "runtimeWorkspaceRoots" => [workspace]
++        }
++      ])
 +
      send_message(port, %{
        "method" => "turn/start",
@@ -291,7 +303,7 @@ diff --git a/elixir/test/symphony_elixir/app_server_test.exs b/elixir/test/symph
 index 4b23aed..f0cccbb 100644
 --- a/elixir/test/symphony_elixir/app_server_test.exs
 +++ b/elixir/test/symphony_elixir/app_server_test.exs
-@@ -1,6 +1,131 @@
+@@ -1,6 +1,139 @@
  defmodule SymphonyElixir.AppServerTest do
    use SymphonyElixir.TestSupport
 
@@ -366,15 +378,23 @@ index 4b23aed..f0cccbb 100644
 +        }
 +      }
 +
++      expected_environment = [
++        %{
++          "environmentId" => "local",
++          "cwd" => workspace,
++          "runtimeWorkspaceRoots" => [workspace]
++        }
++      ]
++
 +      assert thread["params"]["permissions"] == "symphony-pilot"
 +      assert thread["params"]["approvalPolicy"] == expected_approval_policy
-+      assert thread["params"]["environments"] == []
++      assert thread["params"]["environments"] == expected_environment
 +      assert thread["params"]["selectedCapabilityRoots"] == []
 +      assert thread["params"]["dynamicTools"] == []
 +      refute Map.has_key?(thread["params"], "sandbox")
 +      assert turn["params"]["permissions"] == "symphony-pilot"
 +      assert turn["params"]["approvalPolicy"] == expected_approval_policy
-+      assert turn["params"]["environments"] == []
++      assert turn["params"]["environments"] == expected_environment
 +      assert turn["params"]["title"] == "GH-6"
 +      refute Map.has_key?(turn["params"], "sandboxPolicy")
 +      encoded = Jason.encode!(turn)

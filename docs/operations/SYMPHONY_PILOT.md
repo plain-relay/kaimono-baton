@@ -21,7 +21,7 @@ The pinned Symphony patch is `symphony/patches/0001-disable-github-agent-tool.pa
 
 - changes turn metadata title to the identifier only;
 - adds pilot-only named permission-profile selection;
-- sends `environments: []`, `selectedCapabilityRoots: []`, and `dynamicTools: []`;
+- sends exactly one explicit local environment on both `thread/start` and `turn/start`: `environmentId: "local"`, `cwd: workspace`, and `runtimeWorkspaceRoots: [workspace]`; it sends `selectedCapabilityRoots: []` and `dynamicTools: []`;
 - verifies `activePermissionProfile.id == "symphony-pilot"` before `turn/start`;
 - fails the pilot on unexpected dynamic-tool interaction;
 - exposes no GitHub tool specification and rejects GitHub tool execution.
@@ -73,7 +73,7 @@ It does not receive the raw Issue title, Issue prose outside the safe task, comm
 
 The durable `SYMPHONY_PILOT_CODEX_HOME` is an auth-only store and must contain exactly one regular non-symlink `auth.json`. Every app-server launch gets a newly created runtime `CODEX_HOME` containing only a copy of that auth file and the SHA-256-attested control-root config. The runtime home is deleted after the app-server exits and is never reused. Any durable `AGENTS.md`, `config.toml`, skill, hook, plugin, MCP, app, connector, marketplace, memory, or other entry makes startup fail before the permit is consumed.
 
-Codex 0.147.0 is explicitly configured with skill instructions and bundled skills disabled, hooks disabled, apps/plugins/connectors/search disabled, no MCP servers, and no orchestrator capability roots. The patched Symphony request also sends empty environments, capability roots, and dynamic tools and fails closed on external interaction.
+Codex 0.147.0 is explicitly configured with skill instructions and bundled skills disabled, hooks disabled, apps/plugins/connectors/search disabled, no MCP servers, and no orchestrator capability roots. The patched Symphony request selects exactly one built-in `local` environment whose cwd and only runtime workspace root are the host-validated workspace. It does not omit environments, select a default, add a second or remote environment, or send capability roots or dynamic tools; unexpected external interaction fails closed.
 
 Codex 0.147.0 applies this named profile:
 
@@ -247,7 +247,7 @@ Run from a dedicated clean `GH-<number>` workspace on the exact installed target
 node scripts/symphony-pilot-isolation-test.mjs
 ```
 
-The default test uses Codex app-server `thread/start` and sandboxed `command/exec`; it does not prompt a model or transmit canary contents. An explicitly requested `--model-turn` run sends only the fixed synthetic prompt `Return exactly PILOT_MODEL_OK. Do not call tools.` and verifies the response before rerunning the command-network probe. It proves:
+The default test uses Codex app-server `thread/start` and sandboxed `command/exec`; it does not prompt a model or transmit canary contents. An explicitly requested `--model-turn` run sends only the fixed synthetic prompt `Return exactly PILOT_MODEL_OK. Do not call tools.` and verifies the response before rerunning the command-network probe. `--model-edit` first performs that transport check, then uses a synthetic `pilot-fixture.txt` containing only `BEFORE` and requires a model-originated successful `commandExecution` to replace it with exactly `AFTER` and respond `PILOT_EDIT_OK`. It proves:
 
 1. workspace read succeeds;
 2. workspace write succeeds;
@@ -261,6 +261,9 @@ The default test uses Codex app-server `thread/start` and sandboxed `command/exe
 10. unexpected durable pilot-home `AGENTS.md`, skills, hooks, MCP, or plugin content makes startup fail closed;
 11. both the installed control root and stable launcher are absent from the agent namespace, and control modification is impossible;
 12. when explicitly enabled, the trusted app-server can complete the fixed no-tool authenticated provider turn while command network remains denied.
+13. the exact one-local-environment session has a usable inner `command/exec` path;
+14. the selected local environment has exactly the workspace as its cwd and only runtime workspace root;
+15. no remote exec-server configuration reaches model-controlled commands.
 
 Before these checks, the wrapper accepts only Codex 0.147.0 and the test verifies the
 effective granular policy is the exact all-false pilot policy. Missing WSL/Linux,

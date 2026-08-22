@@ -50,8 +50,13 @@ try {
 const elixirRoot = path.join(checkout, 'elixir')
 const adapterSource = fs.readFileSync(path.join(elixirRoot, 'lib/symphony_elixir/github/adapter.ex'), 'utf8')
 const adapterTest = fs.readFileSync(path.join(elixirRoot, 'test/symphony_elixir/github_adapter_test.exs'), 'utf8')
+const appServerSource = fs.readFileSync(path.join(elixirRoot, 'lib/symphony_elixir/codex/app_server.ex'), 'utf8')
+const appServerTest = fs.readFileSync(path.join(elixirRoot, 'test/symphony_elixir/app_server_test.exs'), 'utf8')
 if (!adapterSource.includes('def agent_tool_specs, do: []')) fail('github-tool-boundary-missing')
 if (adapterTest.includes('assert [%{"name" => "github_api"}] = binding.tool_specs')) fail('stale-github-tool-test-expectation')
+const localEnvironmentCount = appServerSource.split('"environmentId" => "local"').length - 1
+if (localEnvironmentCount !== 2 || !appServerSource.includes('"runtimeWorkspaceRoots" => [workspace]') || appServerSource.includes('"environments" => []')) fail('local-environment-contract-missing')
+if (!appServerTest.includes('assert thread["params"]["environments"] == expected_environment') || !appServerTest.includes('assert turn["params"]["environments"] == expected_environment')) fail('local-environment-regression-missing')
 mix(elixirRoot, ['format', '--check-formatted'], 'upstream-format-check-failed')
 console.log('[symphony-upstream] format-check=PASS')
 mix(elixirRoot, ['test', 'test/symphony_elixir/app_server_test.exs', 'test/symphony_elixir/github_adapter_test.exs'], 'focused-upstream-tests-failed')

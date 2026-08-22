@@ -9,9 +9,10 @@ import { spawn, spawnSync } from 'node:child_process'
 const PROFILE = 'symphony-pilot'
 const APPROVAL_FIELDS = ['mcp_elicitations', 'request_permissions', 'rules', 'sandbox_approval', 'skill_approval']
 const options = new Set(process.argv.slice(2))
-if ([...options].some((option) => !['--config-only', '--model-turn'].includes(option)) || options.size > 1) fail('unexpected-argument')
+if ([...options].some((option) => !['--config-only', '--model-turn', '--model-edit'].includes(option)) || options.size > 1) fail('unexpected-argument')
 const configOnly = options.has('--config-only')
 const modelTurn = options.has('--model-turn')
+const modelEdit = options.has('--model-edit')
 
 function fail(code) { throw new Error(code) }
 function requireEnv(name) { const value = process.env[name]?.trim(); if (!value) fail(`missing-${name.toLowerCase()}`); return path.resolve(value) }
@@ -21,6 +22,20 @@ function reportInvariant(id, label, passed, status = '') {
 }
 
 const workspace = fs.realpathSync(process.cwd())
+const localEnvironment = Object.freeze([Object.freeze({
+  environmentId: 'local',
+  cwd: workspace,
+  runtimeWorkspaceRoots: Object.freeze([workspace]),
+})])
+function hasExactLocalEnvironment(value) {
+  return Array.isArray(value) && value.length === 1 &&
+    value[0]?.environmentId === 'local' &&
+    value[0]?.cwd === workspace &&
+    Array.isArray(value[0]?.runtimeWorkspaceRoots) &&
+    value[0].runtimeWorkspaceRoots.length === 1 &&
+    value[0].runtimeWorkspaceRoots[0] === workspace
+}
+if (!hasExactLocalEnvironment(localEnvironment)) fail('local-environment-contract-invalid')
 const controlRoot = requireEnv('SYMPHONY_PILOT_CONTROL_ROOT')
 const pilotHome = requireEnv('SYMPHONY_PILOT_CODEX_HOME')
 const stateRoot = requireEnv('SYMPHONY_PILOT_STATE_DIR')
@@ -109,6 +124,8 @@ const outsideCanary = path.join(outsideRoot, 'canary')
 const workspaceCanary = path.join(workspace, '.symphony', `workspace-read-${nonce}`)
 const workspaceProbe = path.join(workspace, '.symphony', `workspace-write-${nonce}`)
 const workspaceProbeMarker = 'SYMPHONY_PILOT_WORKSPACE_WRITE_PROBE\n'
+const modelFixture = path.join(workspace, 'pilot-fixture.txt')
+let modelFixtureCreated = false
 const controlFinalizer = path.join(controlRoot, 'scripts', 'symphony-pilot-host.mjs')
 
 fs.mkdirSync(codexDir, { recursive: true, mode: 0o700 })
@@ -245,7 +262,7 @@ async function runAuthenticatedModelTurn(thread) {
     threadId: thread.thread.id,
     cwd: workspace,
     permissions: PROFILE,
-    environments: [],
+    environments: localEnvironment,
     input: [{ type: 'text', text: 'Return exactly PILOT_MODEL_OK. Do not call tools.' }],
   })
   const completed = await waitForNotification('turn/completed', (params) => params?.turn?.id === turn?.turn?.id)
@@ -258,6 +275,27 @@ async function runAuthenticatedModelTurn(thread) {
   const usedTool = items.some((item) => /(?:command|tool|mcp|web|function|exec)/i.test(String(item?.type ?? '')))
   const messages = items.filter((item) => item?.type === 'agentMessage').map((item) => item.text)
   if (usedTool || messages.length !== 1 || messages[0]?.trim() !== 'PILOT_MODEL_OK') throw new Error('model-turn-output-invalid')
+}
+
+async function runModelEditTurn(thread) {
+  if (fs.existsSync(modelFixture)) throw new Error('model-fixture-already-exists')
+  fs.writeFileSync(modelFixture, 'BEFORE\n', { flag: 'wx', mode: 0o600 })
+  modelFixtureCreated = true
+  const turn = await rpc('turn/start', {
+    threadId: thread.thread.id,
+    cwd: workspace,
+    permissions: PROFILE,
+    environments: localEnvironment,
+    input: [{ type: 'text', text: 'You must modify the workspace file `pilot-fixture.txt`. Use the available command execution tool to replace its entire contents with:\n\nAFTER\n\nDo not merely describe the change. Do not use network access. After making the change, verify the file and respond exactly:\n\nPILOT_EDIT_OK' }],
+  })
+  const completed = await waitForNotification('turn/completed', (params) => params?.turn?.id === turn?.turn?.id)
+  const items = completed.params?.turn?.items
+  if (completed.params?.turn?.status !== 'completed' || !Array.isArray(items)) throw new Error('model-edit-not-completed')
+  const commandSucceeded = items.some((item) => item?.type === 'commandExecution' && item?.status === 'completed' && (item?.exitCode === 0 || item?.exitCode === undefined))
+  const messages = items.filter((item) => item?.type === 'agentMessage').map((item) => item.text)
+  if (!commandSucceeded) throw new Error('model-command-execution-not-successful')
+  if (fs.readFileSync(modelFixture, 'utf8') !== 'AFTER\n') throw new Error('model-fixture-content-invalid')
+  if (messages.at(-1)?.trim() !== 'PILOT_EDIT_OK') throw new Error('model-edit-output-invalid')
 }
 
 function verifyControlFilesNotWritableByServiceUser() {
@@ -282,7 +320,8 @@ const cleanup = async () => {
       await waitForChildExit(1000)
     }
   }
-  for (const file of [homeCanary, codexCanary, outsideCanary, workspaceCanary, workspaceProbe, statePath, permitPath, `${permitPath}.consuming`]) {
+  for (const file of [homeCanary, codexCanary, outsideCanary, workspaceCanary, workspaceProbe, modelFixtureCreated ? modelFixture : null, statePath, permitPath, `${permitPath}.consuming`]) {
+    if (!file) continue
     try { fs.unlinkSync(file) } catch {}
   }
   try { fs.rmdirSync(outsideRoot) } catch {}
@@ -301,7 +340,7 @@ try {
   const thread = await rpc('thread/start', {
     cwd: workspace,
     permissions: PROFILE,
-    environments: [],
+    environments: localEnvironment,
     selectedCapabilityRoots: [],
     dynamicTools: [],
     ephemeral: true,
@@ -357,11 +396,32 @@ try {
     }))
     let authenticatedModelTurn = true
     let modelTurnStatus = ''
-    if (modelTurn) {
+    if (modelTurn || modelEdit) {
       try { await runAuthenticatedModelTurn(thread) }
       catch (error) {
         authenticatedModelTurn = false
         modelTurnStatus = /^(?:app-server-exited|app-server-rpc-error|app-server-notification-timeout|model-turn-[a-z-]+)$/.test(error?.message || '') ? `status=${error.message}` : 'status=model-turn-failed'
+      }
+    }
+    let localEnvironmentUsable = !modelEdit
+    let modelEditSucceeded = !modelEdit
+    let modelEditStatus = ''
+    if (modelEdit) {
+      if (!authenticatedModelTurn) {
+        reportInvariant('13', 'exact-local-environment', false, 'status=model-transport-prerequisite')
+      } else {
+        localEnvironmentUsable = await runInvariant({
+          id: '13',
+          label: 'exact-local-environment',
+          command: ['/bin/true'],
+        })
+        if (localEnvironmentUsable) {
+          try { await runModelEditTurn(thread) }
+          catch (error) {
+            modelEditSucceeded = false
+            modelEditStatus = /^(?:app-server-exited|app-server-rpc-error|app-server-notification-timeout|model-(?:edit|command|fixture)-[a-z-]+)$/.test(error?.message || '') ? `status=${error.message}` : 'status=model-edit-failed'
+          }
+        }
       }
     }
     // This command probe deliberately runs after the real provider turn.  It
@@ -392,9 +452,21 @@ try {
       command: ['/bin/sh', '-c', `if test ! -e ${quote(controlRoot)}; then exit 0; fi; test ! -w ${quote(controlRoot)} && test ! -w ${quote(controlFinalizer)} && test ! -w ${quote(launcher)}`],
       hostCheck: verifyControlFilesNotWritableByServiceUser,
     }))
-    if (modelTurn) {
+    if (modelTurn || modelEdit) {
       reportInvariant('12', 'authenticated-model-turn', authenticatedModelTurn, modelTurnStatus)
       results.push(authenticatedModelTurn)
+    }
+    if (modelEdit) {
+      const exactRuntimeRoots = authenticatedModelTurn && localEnvironmentUsable && hasExactLocalEnvironment(localEnvironment)
+      reportInvariant('14', 'exact-runtime-workspace-roots', exactRuntimeRoots)
+      results.push(localEnvironmentUsable && exactRuntimeRoots)
+      results.push(await runInvariant({
+        id: '15',
+        label: 'no-remote-environment',
+        command: ['/bin/sh', '-c', 'test -z "${CODEX_EXEC_SERVER_URL:-}"'],
+      }))
+      reportInvariant('MODEL-EXEC', 'synthetic-workspace-edit', modelEditSucceeded, modelEditStatus)
+      results.push(modelEditSucceeded)
     }
     const passed = results.every(Boolean)
     console.log(`OVERALL ${passed ? 'PASS' : 'FAIL'}`)
