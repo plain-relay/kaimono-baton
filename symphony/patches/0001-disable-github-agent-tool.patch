@@ -1,5 +1,5 @@
 diff --git a/elixir/lib/symphony_elixir/codex/app_server.ex b/elixir/lib/symphony_elixir/codex/app_server.ex
-index ae3db62..2f89e19 100644
+index ae3db62..62b78a7 100644
 --- a/elixir/lib/symphony_elixir/codex/app_server.ex
 +++ b/elixir/lib/symphony_elixir/codex/app_server.ex
 @@ -16,6 +16,7 @@ defmodule SymphonyElixir.Codex.AppServer do
@@ -57,7 +57,7 @@ index ae3db62..2f89e19 100644
        {:ok, turn_id} ->
          session_id = "#{thread_id}-#{turn_id}"
          Logger.info("Codex session started for #{issue_context(issue)} session_id=#{session_id}")
-@@ -314,25 +339,42 @@ defmodule SymphonyElixir.Codex.AppServer do
+@@ -314,25 +339,39 @@ defmodule SymphonyElixir.Codex.AppServer do
    defp start_thread(
           port,
           workspace,
@@ -104,18 +104,19 @@ index ae3db62..2f89e19 100644
 -          _ -> {:error, {:invalid_thread_payload, thread_payload}}
 +      {:ok, %{"thread" => thread_payload} = response} ->
 +        with :ok <- validate_active_permission_profile(response, permission_profile) do
-+          case thread_payload do
-+            %{"id" => thread_id} -> {:ok, thread_id}
-+            _ -> {:error, {:invalid_thread_payload, thread_payload}}
-+          end
++          extract_thread_id(thread_payload)
          end
 
        other ->
-@@ -340,23 +382,47 @@ defmodule SymphonyElixir.Codex.AppServer do
+@@ -340,23 +379,51 @@ defmodule SymphonyElixir.Codex.AppServer do
      end
    end
 
 -  defp start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
++  defp extract_thread_id(%{"id" => thread_id}), do: {:ok, thread_id}
++
++  defp extract_thread_id(thread_payload), do: {:error, {:invalid_thread_payload, thread_payload}}
++
 +  defp validate_active_permission_profile(_response, nil), do: :ok
 +
 +  defp validate_active_permission_profile(
@@ -173,7 +174,7 @@ index ae3db62..2f89e19 100644
      })
 
      case await_response(port, @turn_start_id) do
-@@ -535,6 +601,16 @@ defmodule SymphonyElixir.Codex.AppServer do
+@@ -535,6 +602,16 @@ defmodule SymphonyElixir.Codex.AppServer do
 
          {:error, {:approval_required, payload}}
 
@@ -190,7 +191,7 @@ index ae3db62..2f89e19 100644
        :unhandled ->
          if needs_input?(method, payload) do
            emit_message(
-@@ -616,7 +692,7 @@ defmodule SymphonyElixir.Codex.AppServer do
+@@ -616,7 +693,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
      emit_message(on_message, event, %{payload: payload, raw: payload_string}, metadata)
 
@@ -447,7 +448,7 @@ index 2475853..f4fdb1e 100644
               "github_api",
               %{"method" => "GET", "path" => "/user"},
               github_client: fn _method, _path, _params, _body, _opts ->
-@@ -392,6 +392,6 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
+@@ -392,7 +392,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
               token_env
             ]
 
