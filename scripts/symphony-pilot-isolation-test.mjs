@@ -155,6 +155,7 @@ function waitForChildExit(timeoutMs) {
 function commandFailureStatus(result) {
   // Never emit command stderr: command paths can contain host-only canary names.
   const stderr = typeof result?.stderr === 'string' ? result.stderr : ''
+  if (/bubblewrap is unavailable/i.test(stderr)) return 'status=codex-inner-bwrap-unavailable'
   if (/bwrap/i.test(stderr) && /(?:namespace|unshare)/i.test(stderr)) return 'status=nested-bwrap-namespace'
   if (/bwrap/i.test(stderr)) return 'status=bwrap-launch-failed'
   if (/(?:seccomp|landlock|sandbox)/i.test(stderr)) return 'status=codex-sandbox-denied'
