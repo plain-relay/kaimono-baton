@@ -42,13 +42,21 @@ fi
 [ "$(/usr/bin/readlink -f -- "$runtime_parent")" = "$runtime_parent" ] || fail runtime-home-parent-invalid
 /usr/bin/chmod 0700 "$runtime_parent"
 runtime_home="$(/usr/bin/mktemp -d "$runtime_parent/codex-home-XXXXXX")"
+sandbox_pid=''
 cleanup() {
   case "$runtime_home/" in "$runtime_parent/"*) /usr/bin/rm -rf -- "$runtime_home" ;; *) fail runtime-home-cleanup-unsafe ;; esac
 }
+stop_sandbox() {
+  if [ -n "$sandbox_pid" ]; then
+    kill -TERM "$sandbox_pid" 2>/dev/null || true
+    wait "$sandbox_pid" 2>/dev/null || true
+    sandbox_pid=''
+  fi
+}
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'stop_sandbox; exit 129' HUP
+trap 'stop_sandbox; exit 130' INT
+trap 'stop_sandbox; exit 143' TERM
 /usr/bin/install -m 0600 "$template" "$runtime_home/config.toml"
 /usr/bin/install -m 0600 "$pilot_auth_home/auth.json" "$runtime_home/auth.json"
 
@@ -95,4 +103,11 @@ set -- "$@" \
   --setenv LANG C.UTF-8 \
   --chdir "$workspace"
 
-"$bwrap_bin" "$@" /pilot-runtime/codex app-server
+"$bwrap_bin" "$@" /pilot-runtime/codex app-server &
+sandbox_pid=$!
+set +e
+wait "$sandbox_pid"
+status=$?
+set -e
+sandbox_pid=''
+exit "$status"
