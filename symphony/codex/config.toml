@@ -1,6 +1,6 @@
 model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
-approval_policy = { reject = { sandbox_approval = true, rules = true, mcp_elicitations = true, request_permissions = true } }
+approval_policy = { granular = { sandbox_approval = false, rules = false, skill_approval = false, mcp_elicitations = false, request_permissions = false } }
 default_permissions = "symphony-pilot"
 web_search = "disabled"
 check_for_update_on_startup = false

@@ -7,6 +7,9 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 
 const PROFILE = 'symphony-pilot'
+const APPROVAL_FIELDS = ['mcp_elicitations', 'request_permissions', 'rules', 'sandbox_approval', 'skill_approval']
+const configOnly = process.argv[2] === '--config-only'
+if (process.argv.length > (configOnly ? 3 : 2)) fail('unexpected-argument')
 
 function fail(code) { throw new Error(code) }
 function requireEnv(name) { const value = process.env[name]?.trim(); if (!value) fail(`missing-${name.toLowerCase()}`); return path.resolve(value) }
@@ -22,6 +25,33 @@ const bwrap = requireEnv('SYMPHONY_PILOT_BWRAP_BIN')
 if (spawnSync(bwrap, ['--version']).status !== 0) fail('bwrap-missing')
 if (spawnSync('/usr/bin/curl', ['--version']).status !== 0) fail('curl-missing')
 if (!fs.statSync(launcher).isFile()) fail('trusted-launcher-missing')
+
+const unexpectedPilotHomeEntries = [
+  { path: path.join(pilotHome, 'AGENTS.md'), kind: 'file', content: 'UNTRUSTED_INSTRUCTION\n' },
+  { path: path.join(pilotHome, 'skills'), kind: 'directory' },
+  { path: path.join(pilotHome, 'hooks'), kind: 'directory' },
+  { path: path.join(pilotHome, 'config.toml'), kind: 'file', content: '[mcp_servers.untrusted]\ncommand = "false"\n' },
+  { path: path.join(pilotHome, 'plugins'), kind: 'directory' },
+]
+for (const entry of unexpectedPilotHomeEntries) {
+  try {
+    if (entry.kind === 'directory') fs.mkdirSync(entry.path, { mode: 0o700 })
+    else fs.writeFileSync(entry.path, entry.content, { flag: 'wx', mode: 0o600 })
+    const rejected = spawnSync(launcher, ['codex', 'app-server'], {
+      cwd: workspace,
+      env: process.env,
+      encoding: 'utf8',
+      timeout: 15000,
+    })
+    if (rejected.status === 0 || !rejected.stderr.includes('pilot-home-unexpected-content')) fail('pilot-home-injection-not-rejected')
+  } finally {
+    if (entry.kind === 'directory') {
+      try { fs.rmdirSync(entry.path) } catch {}
+    } else {
+      try { fs.unlinkSync(entry.path) } catch {}
+    }
+  }
+}
 
 const issueMatch = path.basename(workspace).match(/^GH-([1-9]\d*)$/)
 if (!issueMatch) fail('dedicated-gh-workspace-required')
@@ -79,6 +109,10 @@ child.stdout.on('data', (chunk) => {
     }
   }
 })
+child.on('exit', () => {
+  for (const { reject } of pending.values()) reject(new Error('app-server-exited'))
+  pending.clear()
+})
 
 function rpc(method, params) {
   const id = nextId++
@@ -102,6 +136,10 @@ try {
     capabilities: { experimentalApi: true },
   })
   child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`)
+  const config = await rpc('config/read', { includeLayers: false, cwd: workspace })
+  const granular = config?.config?.approval_policy?.granular
+  if (!granular || Object.keys(granular).sort().join('|') !== APPROVAL_FIELDS.join('|')) fail('effective-approval-policy-mismatch')
+  if (APPROVAL_FIELDS.some((field) => granular[field] !== false)) fail('effective-approval-policy-not-fail-closed')
   const thread = await rpc('thread/start', {
     cwd: workspace,
     permissions: PROFILE,
@@ -111,30 +149,36 @@ try {
     ephemeral: true,
   })
   if (thread?.activePermissionProfile?.id !== PROFILE) fail('active-permission-profile-mismatch')
-  const shell = [
-    'set -eu',
-    `test -r ${quote(workspaceCanary)}`,
-    `printf probe > ${quote(workspaceProbe)}`,
-    `test ! -r ${quote(homeCanary)}`,
-    `test ! -r ${quote(codexCanary)}`,
-    `test ! -r ${quote(durableAuth)}`,
-    'test ! -r "$CODEX_HOME/auth.json"',
-    `test ! -r ${quote(outsideCanary)}`,
-    'test ! -r /mnt/c/Windows/win.ini',
-    "if curl --silent --show-error --max-time 3 https://example.com >/dev/null 2>&1; then exit 71; fi",
-    "printf 'workspace_read=pass\\nworkspace_write=pass\\nhome_read=blocked\\nnormal_codex_read=blocked\\npilot_auth_read=blocked\\noutside_read=blocked\\nmnt_c_read=blocked\\nnetwork=blocked\\n'",
-  ].join('; ')
-  const result = await rpc('command/exec', {
-    command: ['/bin/sh', '-c', shell],
-    cwd: workspace,
-    permissionProfile: PROFILE,
-    timeoutMs: 15000,
-    outputBytesCap: 4096,
-  })
-  if (result?.exitCode !== 0) fail('negative-isolation-command-failed')
-  const expected = ['workspace_read=pass', 'workspace_write=pass', 'home_read=blocked', 'normal_codex_read=blocked', 'pilot_auth_read=blocked', 'outside_read=blocked', 'mnt_c_read=blocked', 'network=blocked']
-  if (result.stdout.trim().split(/\r?\n/).join('|') !== expected.join('|')) fail('negative-isolation-result-mismatch')
-  console.log(`[symphony-pilot-isolation] PASS profile=${PROFILE} codex=0.147.0`)
+  if (configOnly) {
+    console.log(`[symphony-pilot-config] PASS profile=${PROFILE} approval=granular-fail-closed codex=0.147.0`)
+  } else {
+    const shell = [
+      'set -eu',
+      `test -r ${quote(workspaceCanary)}`,
+      `printf probe > ${quote(workspaceProbe)}`,
+      `test ! -r ${quote(homeCanary)}`,
+      `test ! -r ${quote(codexCanary)}`,
+      `test ! -r ${quote(durableAuth)}`,
+      'test ! -r "$CODEX_HOME/auth.json"',
+      `test ! -r ${quote(outsideCanary)}`,
+      'test ! -r /mnt/c/Windows/win.ini',
+      `test ! -e ${quote(controlRoot)}`,
+      `test ! -w ${quote(launcher)}`,
+      "if curl --silent --show-error --max-time 3 https://example.com >/dev/null 2>&1; then exit 71; fi",
+      "printf 'workspace_read=pass\\nworkspace_write=pass\\nhome_read=blocked\\nnormal_codex_read=blocked\\npilot_auth_read=blocked\\noutside_read=blocked\\nmnt_c_read=blocked\\nnetwork=blocked\\ncontrol_write=blocked\\n'",
+    ].join('; ')
+    const result = await rpc('command/exec', {
+      command: ['/bin/sh', '-c', shell],
+      cwd: workspace,
+      permissionProfile: PROFILE,
+      timeoutMs: 15000,
+      outputBytesCap: 4096,
+    })
+    if (result?.exitCode !== 0) fail('negative-isolation-command-failed')
+    const expected = ['workspace_read=pass', 'workspace_write=pass', 'home_read=blocked', 'normal_codex_read=blocked', 'pilot_auth_read=blocked', 'outside_read=blocked', 'mnt_c_read=blocked', 'network=blocked', 'control_write=blocked']
+    if (result.stdout.trim().split(/\r?\n/).join('|') !== expected.join('|')) fail('negative-isolation-result-mismatch')
+    console.log(`[symphony-pilot-isolation] PASS profile=${PROFILE} approval=granular-fail-closed pilot_home_injection=blocked control_write=blocked codex=0.147.0`)
+  }
 } finally {
   cleanup()
 }

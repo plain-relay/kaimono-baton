@@ -94,6 +94,12 @@ Unlisted filesystem paths are denied. The normal HOME, normal `~/.codex`, unrela
 
 Unexpected approval, permission escalation, MCP elicitation, external-tool call, or user-input request terminates the unattended run. The pilot does not silently approve it.
 
+Codex 0.147.0 uses its `granular` approval policy with `sandbox_approval`, `rules`,
+`skill_approval`, `mcp_elicitations`, and `request_permissions` all explicitly set to
+`false`. In this pinned version, `false` rejects that approval flow instead of
+presenting it to an unattended user. The negative gate reads the runtime-effective
+policy through app-server `config/read` before starting a thread.
+
 ## Required local setup
 
 The runtime control plane is an installed artifact, not the Issue workspace or a normal checkout. From an independently reviewed exact source head, an operator explicitly installs a versioned control root; unattended runtime never invokes `sudo` or self-installs:
@@ -247,9 +253,13 @@ The test uses Codex app-server `thread/start` and sandboxed `command/exec`; it d
 7. `/mnt/c` is unavailable;
 8. external network access fails;
 9. `activePermissionProfile.id` is exactly `symphony-pilot`;
-10. the wrapper accepts only Codex 0.147.0.
+10. unexpected durable pilot-home `AGENTS.md`, skills, hooks, MCP, or plugin content makes startup fail closed;
+11. the installed control root and finalizer are absent or non-writable inside the agent boundary.
 
-Missing WSL/Linux, `bwrap`, `curl`, exact Codex, config, or expected profile is a hard failure, not a skip/pass.
+Before these checks, the wrapper accepts only Codex 0.147.0 and the test verifies the
+effective granular policy is the exact all-false pilot policy. Missing WSL/Linux,
+`bwrap`, `curl`, exact Codex, config, or expected profile is a hard failure, not a
+skip/pass.
 
 ## Start, stop, and rollback
 

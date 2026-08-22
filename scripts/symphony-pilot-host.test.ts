@@ -217,6 +217,18 @@ describe('trusted control, pilot home, and launch permit', () => {
       'hooks = false', 'apps = false', 'plugins = false', 'connectors = false',
     ]) expect(config).toContain(required)
   })
+  it('uses the exact Codex 0.147.0 granular fail-closed approval policy everywhere', () => {
+    const config = fs.readFileSync(path.resolve('symphony/codex/config.toml'), 'utf8')
+    const workflow = fs.readFileSync(path.resolve('symphony/WORKFLOW.md'), 'utf8')
+    expect(config).toContain('approval_policy = { granular = { sandbox_approval = false, rules = false, skill_approval = false, mcp_elicitations = false, request_permissions = false } }')
+    expect(config).not.toContain('reject =')
+    expect(workflow).toContain([
+      '  approval_policy:', '    granular:', '      sandbox_approval: false',
+      '      rules: false', '      skill_approval: false', '      mcp_elicitations: false',
+      '      request_permissions: false',
+    ].join('\n'))
+    expect(workflow).not.toContain('    reject:')
+  })
   it('rejects missing and mismatched one-use launch permits', () => {
     const stateRoot = temp('permit'); process.env.SYMPHONY_PILOT_STATE_DIR = stateRoot
     process.env.SYMPHONY_PILOT_INSTANCE_ID = '11111111-1111-4111-8111-111111111111'

@@ -29,11 +29,12 @@ agent:
 codex:
   command: '"$SYMPHONY_PILOT_TRUSTED_LAUNCHER" codex app-server'
   approval_policy:
-    reject:
-      sandbox_approval: true
-      rules: true
-      mcp_elicitations: true
-      request_permissions: true
+    granular:
+      sandbox_approval: false
+      rules: false
+      skill_approval: false
+      mcp_elicitations: false
+      request_permissions: false
   permission_profile: symphony-pilot
   read_timeout_ms: 5000
   stall_timeout_ms: 300000

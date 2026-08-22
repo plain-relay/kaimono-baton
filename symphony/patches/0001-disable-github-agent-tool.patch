@@ -273,11 +273,24 @@ index 5a77016..018234b 100644
 
    @spec secret_environment_names(map()) :: [String.t()]
    def secret_environment_names(tracker_settings), do: Client.secret_environment_names(tracker_settings)
+diff --git a/elixir/lib/symphony_elixir/workspace.ex b/elixir/lib/symphony_elixir/workspace.ex
+index 28ee2da..b906eab 100644
+--- a/elixir/lib/symphony_elixir/workspace.ex
++++ b/elixir/lib/symphony_elixir/workspace.ex
+@@ -401,7 +401,7 @@ defmodule SymphonyElixir.Workspace do
+
+     task =
+       Task.async(fn ->
+-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
++        System.cmd("/bin/sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+       end)
+
+     case Task.yield(task, timeout_ms) do
 diff --git a/elixir/test/symphony_elixir/app_server_test.exs b/elixir/test/symphony_elixir/app_server_test.exs
-index 4b23aed..929752d 100644
+index 4b23aed..f0cccbb 100644
 --- a/elixir/test/symphony_elixir/app_server_test.exs
 +++ b/elixir/test/symphony_elixir/app_server_test.exs
-@@ -1,6 +1,99 @@
+@@ -1,6 +1,131 @@
  defmodule SymphonyElixir.AppServerTest do
    use SymphonyElixir.TestSupport
 
@@ -305,8 +318,25 @@ index 4b23aed..929752d 100644
 +        esac
 +      done
 +      """)
++
 +      File.chmod!(codex_binary, 0o755)
-+      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root, codex_command: "#{codex_binary} app-server")
++
++      approval_policy = %{
++        granular: %{
++          sandbox_approval: false,
++          rules: false,
++          skill_approval: false,
++          mcp_elicitations: false,
++          request_permissions: false
++        }
++      }
++
++      write_workflow_file!(Workflow.workflow_file_path(),
++        workspace_root: workspace_root,
++        codex_command: "#{codex_binary} app-server",
++        codex_approval_policy: approval_policy
++      )
++
 +      workflow = File.read!(Workflow.workflow_file_path())
 +      File.write!(Workflow.workflow_file_path(), String.replace(workflow, "  thread_sandbox:", "  permission_profile: symphony-pilot\n  thread_sandbox:"))
 +
@@ -324,12 +354,25 @@ index 4b23aed..929752d 100644
 +      payloads = File.stream!(trace_file) |> Enum.map(&Jason.decode!/1)
 +      thread = Enum.find(payloads, &(&1["method"] == "thread/start"))
 +      turn = Enum.find(payloads, &(&1["method"] == "turn/start"))
++
++      expected_approval_policy = %{
++        "granular" => %{
++          "sandbox_approval" => false,
++          "rules" => false,
++          "skill_approval" => false,
++          "mcp_elicitations" => false,
++          "request_permissions" => false
++        }
++      }
++
 +      assert thread["params"]["permissions"] == "symphony-pilot"
++      assert thread["params"]["approvalPolicy"] == expected_approval_policy
 +      assert thread["params"]["environments"] == []
 +      assert thread["params"]["selectedCapabilityRoots"] == []
 +      assert thread["params"]["dynamicTools"] == []
 +      refute Map.has_key?(thread["params"], "sandbox")
 +      assert turn["params"]["permissions"] == "symphony-pilot"
++      assert turn["params"]["approvalPolicy"] == expected_approval_policy
 +      assert turn["params"]["environments"] == []
 +      assert turn["params"]["title"] == "GH-6"
 +      refute Map.has_key?(turn["params"], "sandboxPolicy")
@@ -351,6 +394,7 @@ index 4b23aed..929752d 100644
 +      workspace = Path.join(workspace_root, "GH-6")
 +      codex_binary = Path.join(test_root, "fake-codex")
 +      File.mkdir_p!(workspace)
++
 +      File.write!(codex_binary, """
 +      #!/bin/sh
 +      count=0
@@ -363,6 +407,7 @@ index 4b23aed..929752d 100644
 +        esac
 +      done
 +      """)
++
 +      File.chmod!(codex_binary, 0o755)
 +      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root, codex_command: "#{codex_binary} app-server")
 +      workflow = File.read!(Workflow.workflow_file_path())
@@ -378,7 +423,7 @@ index 4b23aed..929752d 100644
      test_root =
        Path.join(
 diff --git a/elixir/test/symphony_elixir/github_adapter_test.exs b/elixir/test/symphony_elixir/github_adapter_test.exs
-index 2475853..d9f9b79 100644
+index 2475853..f4fdb1e 100644
 --- a/elixir/test/symphony_elixir/github_adapter_test.exs
 +++ b/elixir/test/symphony_elixir/github_adapter_test.exs
 @@ -31,7 +31,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
@@ -402,12 +447,11 @@ index 2475853..d9f9b79 100644
               "github_api",
               %{"method" => "GET", "path" => "/user"},
               github_client: fn _method, _path, _params, _body, _opts ->
-diff --git a/elixir/lib/symphony_elixir/workspace.ex b/elixir/lib/symphony_elixir/workspace.ex
---- a/elixir/lib/symphony_elixir/workspace.ex
-+++ b/elixir/lib/symphony_elixir/workspace.ex
-@@ -402,4 +402,4 @@ defmodule SymphonyElixir.Workspace do
-     task =
-       Task.async(fn ->
--        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
-+        System.cmd("/bin/sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
-       end)
+@@ -392,6 +392,6 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
+              token_env
+            ]
+
+-    assert [%{"name" => "github_api"}] = binding.tool_specs
++    assert [] = binding.tool_specs
+     assert :ok = Config.validate!()
+   end
