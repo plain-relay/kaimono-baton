@@ -239,6 +239,19 @@ describe('trusted control, pilot home, and launch permit', () => {
     expect(config).toContain('"/usr/local" = "deny"')
     expect(config).toContain('"/usr/src" = "deny"')
   })
+  it('requires and pins the separate Codex Code Mode host without granting it to model commands', () => {
+    const wrapper = fs.readFileSync(path.resolve('scripts/symphony-pilot-codex.sh'), 'utf8')
+    const host = fs.readFileSync(path.resolve('scripts/symphony-pilot-host.mjs'), 'utf8')
+    const isolation = fs.readFileSync(path.resolve('scripts/symphony-pilot-isolation-test.mjs'), 'utf8')
+    const operations = fs.readFileSync(path.resolve('docs/operations/SYMPHONY_PILOT.md'), 'utf8')
+    const digest = '00ecf5d040865b97884c488883abd342581c2a432debe7a54e4646bceee3d2d6'
+    for (const source of [wrapper, host, isolation, operations]) expect(source).toContain('SYMPHONY_PILOT_CODE_MODE_HOST_BIN')
+    expect(wrapper).toContain(digest)
+    expect(host).toContain(digest)
+    expect(isolation).toContain(digest)
+    expect(wrapper).toContain('--ro-bind "$code_mode_host_bin" /pilot-runtime/codex-code-mode-host')
+    expect(fs.readFileSync(path.resolve('symphony/codex/config.toml'), 'utf8')).not.toContain('"/pilot-runtime/codex-code-mode-host" = "read"')
+  })
   it('rejects missing and mismatched one-use launch permits', () => {
     const stateRoot = temp('permit'); process.env.SYMPHONY_PILOT_STATE_DIR = stateRoot
     process.env.SYMPHONY_PILOT_INSTANCE_ID = '11111111-1111-4111-8111-111111111111'

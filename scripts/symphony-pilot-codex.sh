@@ -11,12 +11,17 @@ fail() {
 owner_process_identity=$2
 case "$owner_process_identity" in *[!0-9a-f]*|????????????????????????????????????????????????????????????????) ;; *) fail owner-process-identity-invalid ;; esac
 
+# GPT-5.6 models use Code Mode. The companion host is a distinct executable,
+# so it must be attested and bound explicitly instead of being PATH-resolved.
+code_mode_host_sha256=00ecf5d040865b97884c488883abd342581c2a432debe7a54e4646bceee3d2d6
+
 control_root="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CONTROL_ROOT:?SYMPHONY_PILOT_CONTROL_ROOT is required}")"
 workspace="$(/usr/bin/readlink -f -- "$PWD")"
 workspace_root="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_WORKSPACE_ROOT:?SYMPHONY_PILOT_WORKSPACE_ROOT is required}")"
 state_root="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_STATE_DIR:?SYMPHONY_PILOT_STATE_DIR is required}")"
 pilot_auth_home="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CODEX_HOME:?SYMPHONY_PILOT_CODEX_HOME is required}")"
 codex_bin="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CODEX_BIN:?SYMPHONY_PILOT_CODEX_BIN is required}")"
+code_mode_host_bin="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CODE_MODE_HOST_BIN:?SYMPHONY_PILOT_CODE_MODE_HOST_BIN is required}")"
 node_bin="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_NODE_BIN:?SYMPHONY_PILOT_NODE_BIN is required}")"
 bwrap_bin="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_BWRAP_BIN:?SYMPHONY_PILOT_BWRAP_BIN is required}")"
 template="$control_root/symphony/codex/config.toml"
@@ -27,9 +32,12 @@ case "$workspace" in /mnt/c|/mnt/c/*) fail workspace-on-mnt-c ;; esac
 case "$pilot_auth_home" in /mnt/c|/mnt/c/*) fail pilot-home-on-mnt-c ;; esac
 case "$pilot_auth_home/" in "$workspace/"*) fail pilot-home-inside-workspace ;; esac
 [ -x "$codex_bin" ] && [ -f "$codex_bin" ] && [ ! -L "$codex_bin" ] || fail codex-binary-invalid
+[ -x "$code_mode_host_bin" ] && [ -f "$code_mode_host_bin" ] && [ ! -L "$code_mode_host_bin" ] || fail code-mode-host-binary-invalid
 [ -x "$bwrap_bin" ] && [ -f "$bwrap_bin" ] && [ ! -L "$bwrap_bin" ] || fail bwrap-binary-invalid
 [ -f "$template" ] && [ ! -L "$template" ] || fail pilot-config-missing
 [ "$(/usr/bin/env -i HOME=/nonexistent PATH=/usr/bin:/bin "$codex_bin" --version)" = 'codex-cli 0.147.0' ] || fail codex-version-mismatch
+[ "$(/usr/bin/sha256sum "$code_mode_host_bin" | /usr/bin/cut -d ' ' -f 1)" = "$code_mode_host_sha256" ] || fail code-mode-host-digest-mismatch
+/usr/bin/env -i PATH=/usr/bin:/bin "$code_mode_host_bin" --help >/dev/null 2>&1 || fail code-mode-host-invalid
 [ "$(/usr/bin/env -i PATH=/usr/bin:/bin "$bwrap_bin" --version)" = 'bubblewrap 0.11.2' ] || fail bwrap-version-mismatch
 /usr/bin/env -i PATH=/usr/bin:/bin "$bwrap_bin" --help 2>&1 | /usr/bin/grep -F -- '--perms' >/dev/null || fail bwrap-perms-unsupported
 
@@ -70,6 +78,7 @@ set -- \
   --proc /proc --dev /dev --tmpfs /tmp \
   --dir /pilot-runtime \
   --ro-bind "$codex_bin" /pilot-runtime/codex \
+  --ro-bind "$code_mode_host_bin" /pilot-runtime/codex-code-mode-host \
   --ro-bind "$bwrap_bin" /pilot-runtime/bwrap
 
 for runtime_path in /usr /bin /lib /lib64; do

@@ -557,6 +557,8 @@ const TRUSTED_BINARY_ENV = Object.freeze({
   shell: 'SYMPHONY_PILOT_SHELL_BIN',
 })
 
+const CODE_MODE_HOST_SHA256 = '00ecf5d040865b97884c488883abd342581c2a432debe7a54e4646bceee3d2d6'
+
 function trustedBinary(kind) {
   const variable = TRUSTED_BINARY_ENV[kind]
   const configured = process.env[variable]?.trim()
@@ -770,8 +772,9 @@ function verifyRuntimePins(cwd) {
   const configuredWorkspaceRoot = process.env.SYMPHONY_PILOT_WORKSPACE_ROOT?.trim()
   const configuredLauncher = process.env.SYMPHONY_PILOT_TRUSTED_LAUNCHER?.trim()
   const configuredCodex = process.env.SYMPHONY_PILOT_CODEX_BIN?.trim()
+  const configuredCodeModeHost = process.env.SYMPHONY_PILOT_CODE_MODE_HOST_BIN?.trim()
   const configuredAuthHome = process.env.SYMPHONY_PILOT_CODEX_HOME?.trim()
-  assert(configuredRoot && configuredControl && configuredWorkspaceRoot && configuredLauncher && configuredCodex && configuredAuthHome, 'pilot-runtime-path-missing')
+  assert(configuredRoot && configuredControl && configuredWorkspaceRoot && configuredLauncher && configuredCodex && configuredCodeModeHost && configuredAuthHome, 'pilot-runtime-path-missing')
   const root = fs.realpathSync(configuredRoot)
   const controlManifest = verifyControlManifest(configuredControl)
   const control = controlManifest.controlRoot
@@ -780,6 +783,7 @@ function verifyRuntimePins(cwd) {
   const durableState = fs.realpathSync(stateRoot())
   const launcher = fs.realpathSync(configuredLauncher)
   const codex = fs.realpathSync(configuredCodex)
+  const codeModeHost = fs.realpathSync(configuredCodeModeHost)
   const authHome = fs.realpathSync(configuredAuthHome)
   const runtime = trustedRuntimePaths()
   assertPosixTrusted(workspaceRoot, { directory: true })
@@ -789,12 +793,14 @@ function verifyRuntimePins(cwd) {
   validatePilotAuthStore(authHome)
   assertPosixTrusted(launcher, { rootOwned: true })
   assertPosixTrusted(codex, { rootOwned: true })
+  assertPosixTrusted(codeModeHost, { rootOwned: true })
+  assert(fileHash(codeModeHost) === CODE_MODE_HOST_SHA256, 'code-mode-host-digest-mismatch')
   assert(!safeInside(control, launcher), 'trusted-launcher-inside-control-root')
   const launcherEntry = controlManifest.entries.find((entry) => entry.relativePath === 'scripts/symphony-pilot-trusted-launcher.sh')
   assert(launcherEntry && fileHash(launcher) === launcherEntry.sha256, 'trusted-launcher-integrity-failed')
   validateTrustedPathSeparation({
     controlRoot: control, stateRoot: durableState, workspaceRoot, workspace,
-    binaries: [launcher, codex, runtime.git, runtime.node, runtime.npm, runtime.bwrap, runtime.shell, runtime.gitExecPath],
+    binaries: [launcher, codex, codeModeHost, runtime.git, runtime.node, runtime.npm, runtime.bwrap, runtime.shell, runtime.gitExecPath],
   })
   assert(!pathsOverlap(authHome, workspace) && !pathsOverlap(authHome, workspaceRoot) && !pathsOverlap(authHome, control), 'pilot-auth-path-overlap')
   assert(fs.realpathSync(path.join(control, 'scripts', 'symphony-pilot-host.mjs')) === fs.realpathSync(process.argv[1]), 'untrusted-host-entrypoint')

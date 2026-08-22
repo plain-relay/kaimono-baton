@@ -11,11 +11,11 @@ Unattended live use is prohibited until the executable negative isolation test p
 ## Pinned runtime
 
 - Symphony: `openai/symphony@8001b52e3062495a16e520e4ceaf8f9de868c4d0`
-- Codex CLI/app-server: exactly `0.147.0`
+- Codex CLI/app-server: exactly `0.147.0`, with the matching official `codex-code-mode-host` companion executable
 - Host: WSL2/Linux with `bubblewrap` (`bwrap`)
 - Codex permission profile: `symphony-pilot`
 
-The host refuses a different Symphony HEAD, an unexpected patch path set, a mutable or overlapping control plane, an untrusted executable path, an unexpected pilot auth-home entry, or a Codex version other than `codex-cli 0.147.0`. No latest-version substitution is permitted.
+The host refuses a different Symphony HEAD, an unexpected patch path set, a mutable or overlapping control plane, an untrusted executable path, an unexpected pilot auth-home entry, a Code Mode host whose fixed release SHA-256 does not match, or a Codex version other than `codex-cli 0.147.0`. No latest-version substitution is permitted.
 
 The pinned Symphony patch is `symphony/patches/0001-disable-github-agent-tool.patch`. It:
 
@@ -93,7 +93,7 @@ default_permissions = "symphony-pilot"
 enabled = false
 ```
 
-Unlisted filesystem paths are denied. The only non-minimal runtime exception is the read-only `/pilot-runtime/codex` executable that Codex 0.147.0 must re-enter inside its own Bubblewrap stage; it does not grant the `/pilot-runtime` directory, the runtime auth home, or any host data. The normal HOME, normal `~/.codex`, unrelated repositories, host operational files, `/mnt/c`, and GitHub credentials are not mounted into the outer bwrap namespace. Only the fresh ephemeral runtime home is mounted for app-server state and authentication; the durable auth store and state/permit roots are absent from the namespace. The runtime home is not in the agent-command permission set. The workspace is the only writable project root.
+Unlisted filesystem paths are denied. The only non-minimal runtime exception is the read-only `/pilot-runtime/codex` executable that Codex 0.147.0 must re-enter inside its own Bubblewrap stage; it does not grant the `/pilot-runtime` directory, the runtime auth home, or any host data. The matching Code Mode host is bound only as `/pilot-runtime/codex-code-mode-host` so the trusted app-server can start its required V8 tool router. It remains outside the model-command permission set: there is no corresponding permission rule, and the host exposes only V8 globals plus the existing app-server-delegated tools. It never receives a host filesystem or network API from model-supplied JavaScript. The normal HOME, normal `~/.codex`, unrelated repositories, host operational files, `/mnt/c`, and GitHub credentials are not mounted into the outer bwrap namespace. Only the fresh ephemeral runtime home is mounted for app-server state and authentication; the durable auth store and state/permit roots are absent from the namespace. The runtime home is not in the agent-command permission set. The workspace is the only writable project root.
 
 The pinned Codex app-server is trusted control-plane code and uses the host network only for its authenticated model-provider transport. The outer namespace therefore does not unshare networking. That does not grant networking to model-controlled execution: the exact `symphony-pilot` profile creates Codex's inner Bubblewrap command sandbox with network disabled. MCP, apps, plugins, connectors, web search, remote environments, capability roots, and dynamic tools remain disabled and fail closed.
 
@@ -125,6 +125,7 @@ export SYMPHONY_PILOT_STATE_DIR=/var/lib/kaimono-baton-symphony/state
 export SYMPHONY_PILOT_SYMPHONY_ROOT=/opt/plain-relay/openai-symphony-8001b52e
 export SYMPHONY_PILOT_CODEX_HOME=/var/lib/kaimono-baton-symphony/codex-auth
 export SYMPHONY_PILOT_CODEX_BIN=/usr/local/libexec/codex-0.147.0
+export SYMPHONY_PILOT_CODE_MODE_HOST_BIN=/opt/plain-relay/codex-runtime/codex-code-mode-host-0.147.0
 export SYMPHONY_PILOT_GIT_BIN=/usr/bin/git
 export SYMPHONY_PILOT_GIT_EXEC_PATH=/usr/lib/git-core
 export SYMPHONY_PILOT_NODE_BIN=/usr/bin/node
@@ -135,7 +136,7 @@ export SYMPHONY_PILOT_INSTANCE_ID='<a fresh random UUID unique to this Symphony 
 export GITHUB_TOKEN='<fine-grained host token supplied outside the repository>'
 ```
 
-Resolve the actual distribution-specific absolute paths; do not copy these examples blindly. Install the exact official Codex 0.147.0 binary at `SYMPHONY_PILOT_CODEX_BIN`. Authenticate the dedicated auth-only store through a separate attended operator step. Do not put auth material in the workspace, repository, control root, normal `~/.codex`, or environment visible inside bwrap.
+Resolve the actual distribution-specific absolute paths; do not copy these examples blindly. Install the exact official Codex 0.147.0 binary at `SYMPHONY_PILOT_CODEX_BIN` and the matching `rust-v0.147.0` Linux `codex-code-mode-host` at `SYMPHONY_PILOT_CODE_MODE_HOST_BIN`. The launcher and Host Guard require its exact binary SHA-256, `00ecf5d040865b97884c488883abd342581c2a432debe7a54e4646bceee3d2d6`; use the official release archive `codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz` (archive SHA-256 `0146adfaac8363ec9fcdb5895f7624db5b2e8617a283887938b7fb97a1dd4356`). Authenticate the dedicated auth-only store through a separate attended operator step. Do not put auth material in the workspace, repository, control root, normal `~/.codex`, or environment visible inside bwrap.
 
 The fine-grained GitHub token is host-only and repository-scoped. Minimum permissions are Metadata read, Contents read/write, Issues read/write, and Pull requests read/write. Do not grant Actions, Administration, Environments, Secrets, Variables, Pages, or organization-wide access.
 
