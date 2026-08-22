@@ -123,7 +123,14 @@ function rpc(method, params) {
 }
 
 const cleanup = () => {
+  try { child.stdin.end() } catch {}
   try { child.kill('SIGTERM') } catch {}
+  const forceKill = setTimeout(() => {
+    if (child.exitCode === null) {
+      try { child.kill('SIGKILL') } catch {}
+    }
+  }, 1000)
+  forceKill.unref()
   for (const file of [homeCanary, codexCanary, outsideCanary, workspaceCanary, workspaceProbe, statePath, permitPath, `${permitPath}.consuming`]) {
     try { fs.unlinkSync(file) } catch {}
   }
