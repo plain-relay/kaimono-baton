@@ -16,18 +16,18 @@ workspace:
   root: "$SYMPHONY_PILOT_WORKSPACE_ROOT"
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/plain-relay/kaimono-baton.git .
+    "$SYMPHONY_PILOT_GIT_BIN" clone --depth 1 https://github.com/plain-relay/kaimono-baton.git .
   before_run: |
-    node "$SYMPHONY_PILOT_CONTROL_ROOT/scripts/symphony-pilot-host.mjs" prepare
+    "$SYMPHONY_PILOT_TRUSTED_LAUNCHER" host prepare
   after_run: |
-    node "$SYMPHONY_PILOT_CONTROL_ROOT/scripts/symphony-pilot-host.mjs" finalize
+    "$SYMPHONY_PILOT_TRUSTED_LAUNCHER" host finalize
   timeout_ms: 900000
 agent:
   max_concurrent_agents: 1
   max_turns: 1
   max_retry_backoff_ms: 300000
 codex:
-  command: '"$SYMPHONY_PILOT_CONTROL_ROOT/scripts/symphony-pilot-codex.sh" app-server'
+  command: '"$SYMPHONY_PILOT_TRUSTED_LAUNCHER" codex app-server'
   approval_policy:
     reject:
       sandbox_approval: true

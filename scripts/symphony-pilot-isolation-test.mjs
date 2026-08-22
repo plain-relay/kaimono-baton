@@ -15,11 +15,29 @@ function quote(value) { return `'${value.replaceAll("'", `'\"'\"'`)}'` }
 const workspace = fs.realpathSync(process.cwd())
 const controlRoot = requireEnv('SYMPHONY_PILOT_CONTROL_ROOT')
 const pilotHome = requireEnv('SYMPHONY_PILOT_CODEX_HOME')
-const wrapper = path.join(controlRoot, 'scripts', 'symphony-pilot-codex.sh')
+const stateRoot = requireEnv('SYMPHONY_PILOT_STATE_DIR')
+const launcher = requireEnv('SYMPHONY_PILOT_TRUSTED_LAUNCHER')
 if (process.platform !== 'linux') fail('wsl-linux-required')
-for (const command of ['bwrap', 'curl']) {
-  if (spawnSync('sh', ['-c', `command -v ${command}`]).status !== 0) fail(`${command}-missing`)
-}
+const bwrap = requireEnv('SYMPHONY_PILOT_BWRAP_BIN')
+if (spawnSync(bwrap, ['--version']).status !== 0) fail('bwrap-missing')
+if (spawnSync('/usr/bin/curl', ['--version']).status !== 0) fail('curl-missing')
+if (!fs.statSync(launcher).isFile()) fail('trusted-launcher-missing')
+
+const issueMatch = path.basename(workspace).match(/^GH-([1-9]\d*)$/)
+if (!issueMatch) fail('dedicated-gh-workspace-required')
+const issueNumber = Number(issueMatch[1])
+const executionId = Number(`9${crypto.randomInt(100000, 999999)}`)
+const ownerInstanceId = process.env.SYMPHONY_PILOT_INSTANCE_ID?.trim()
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(ownerInstanceId || '')) fail('invalid-instance-id')
+const statePath = path.join(stateRoot, `GH-${issueNumber}.json`)
+const permitsDir = path.join(stateRoot, 'launch-permits')
+const permitPath = path.join(permitsDir, `GH-${issueNumber}-${executionId}.json`)
+if (fs.existsSync(statePath) || fs.existsSync(permitPath)) fail('isolation-state-not-empty')
+fs.mkdirSync(permitsDir, { recursive: true, mode: 0o700 })
+const claim = { schemaVersion: 3, state: 'claimed', issueNumber, executionId, taskHash: crypto.randomBytes(32).toString('hex'), baseSha: crypto.randomBytes(20).toString('hex'), ownerInstanceId }
+const permit = { schemaVersion: 1, issueNumber, executionId, taskHash: claim.taskHash, baseSha: claim.baseSha, ownerInstanceId, issuedAt: new Date().toISOString(), nonce: crypto.randomBytes(24).toString('hex') }
+fs.writeFileSync(statePath, `${JSON.stringify(claim)}\n`, { flag: 'wx', mode: 0o600 })
+fs.writeFileSync(permitPath, `${JSON.stringify(permit)}\n`, { flag: 'wx', mode: 0o600 })
 
 const nonce = crypto.randomBytes(12).toString('hex')
 const normalHome = os.homedir()
@@ -27,7 +45,7 @@ if (path.resolve(normalHome) === pilotHome) fail('normal-home-equals-pilot-home'
 const homeCanary = path.join(normalHome, `.symphony-pilot-home-${nonce}`)
 const codexDir = path.join(normalHome, '.codex')
 const codexCanary = path.join(codexDir, `.symphony-pilot-${nonce}`)
-const authCanary = path.join(pilotHome, `.auth-canary-${nonce}`)
+const durableAuth = path.join(pilotHome, 'auth.json')
 const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'symphony-pilot-outside-'))
 const outsideCanary = path.join(outsideRoot, 'canary')
 const workspaceCanary = path.join(workspace, '.symphony', `workspace-read-${nonce}`)
@@ -35,9 +53,9 @@ const workspaceProbe = path.join(workspace, '.symphony', `workspace-write-${nonc
 
 fs.mkdirSync(codexDir, { recursive: true, mode: 0o700 })
 fs.mkdirSync(path.dirname(workspaceCanary), { recursive: true, mode: 0o700 })
-for (const file of [homeCanary, codexCanary, authCanary, outsideCanary, workspaceCanary]) fs.writeFileSync(file, 'CANARY_CONTENT_MUST_NOT_BE_EMITTED\n', { mode: 0o600 })
+for (const file of [homeCanary, codexCanary, outsideCanary, workspaceCanary]) fs.writeFileSync(file, 'CANARY_CONTENT_MUST_NOT_BE_EMITTED\n', { mode: 0o600 })
 
-const child = spawn(wrapper, ['app-server'], {
+const child = spawn(launcher, ['codex', 'app-server'], {
   cwd: workspace,
   env: process.env,
   stdio: ['pipe', 'pipe', 'inherit'],
@@ -72,7 +90,7 @@ function rpc(method, params) {
 
 const cleanup = () => {
   try { child.kill('SIGTERM') } catch {}
-  for (const file of [homeCanary, codexCanary, authCanary, outsideCanary, workspaceCanary, workspaceProbe]) {
+  for (const file of [homeCanary, codexCanary, outsideCanary, workspaceCanary, workspaceProbe, statePath, permitPath, `${permitPath}.consuming`]) {
     try { fs.unlinkSync(file) } catch {}
   }
   try { fs.rmdirSync(outsideRoot) } catch {}
@@ -99,7 +117,8 @@ try {
     `printf probe > ${quote(workspaceProbe)}`,
     `test ! -r ${quote(homeCanary)}`,
     `test ! -r ${quote(codexCanary)}`,
-    `test ! -r ${quote(authCanary)}`,
+    `test ! -r ${quote(durableAuth)}`,
+    'test ! -r "$CODEX_HOME/auth.json"',
     `test ! -r ${quote(outsideCanary)}`,
     'test ! -r /mnt/c/Windows/win.ini',
     "if curl --silent --show-error --max-time 3 https://example.com >/dev/null 2>&1; then exit 71; fi",

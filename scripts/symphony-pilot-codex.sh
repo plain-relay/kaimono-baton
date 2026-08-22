@@ -1,71 +1,98 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 fail() {
   printf '%s\n' "[symphony-pilot] $1" >&2
   exit 1
 }
 
-[[ "$(uname -s)" == Linux ]] || fail wsl-linux-required
-[[ "${1:-}" == app-server && "$#" -eq 1 ]] || fail invalid-codex-wrapper-mode
-command -v bwrap >/dev/null 2>&1 || fail bwrap-missing
-command -v realpath >/dev/null 2>&1 || fail realpath-missing
+[ "$(/usr/bin/uname -s)" = Linux ] || fail wsl-linux-required
+[ "${1:-}" = app-server ] && [ "$#" -eq 1 ] || fail invalid-codex-wrapper-mode
 
-control_root="$(realpath "${SYMPHONY_PILOT_CONTROL_ROOT:?SYMPHONY_PILOT_CONTROL_ROOT is required}")"
-workspace="$(realpath "$PWD")"
-workspace_root="$(realpath "${SYMPHONY_PILOT_WORKSPACE_ROOT:?SYMPHONY_PILOT_WORKSPACE_ROOT is required}")"
-pilot_home="$(realpath "${SYMPHONY_PILOT_CODEX_HOME:?SYMPHONY_PILOT_CODEX_HOME is required}")"
-codex_bin="$(realpath "${SYMPHONY_PILOT_CODEX_BIN:?SYMPHONY_PILOT_CODEX_BIN is required}")"
+control_root="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CONTROL_ROOT:?SYMPHONY_PILOT_CONTROL_ROOT is required}")"
+workspace="$(/usr/bin/readlink -f -- "$PWD")"
+workspace_root="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_WORKSPACE_ROOT:?SYMPHONY_PILOT_WORKSPACE_ROOT is required}")"
+state_root="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_STATE_DIR:?SYMPHONY_PILOT_STATE_DIR is required}")"
+pilot_auth_home="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CODEX_HOME:?SYMPHONY_PILOT_CODEX_HOME is required}")"
+codex_bin="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CODEX_BIN:?SYMPHONY_PILOT_CODEX_BIN is required}")"
+node_bin="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_NODE_BIN:?SYMPHONY_PILOT_NODE_BIN is required}")"
+bwrap_bin="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_BWRAP_BIN:?SYMPHONY_PILOT_BWRAP_BIN is required}")"
 template="$control_root/symphony/codex/config.toml"
+host="$control_root/scripts/symphony-pilot-host.mjs"
 
 case "$workspace/" in "$workspace_root/"*) ;; *) fail workspace-outside-pilot-root ;; esac
 case "$workspace" in /mnt/c|/mnt/c/*) fail workspace-on-mnt-c ;; esac
-case "$pilot_home" in /mnt/c|/mnt/c/*) fail pilot-home-on-mnt-c ;; esac
-case "$pilot_home/" in "$workspace/"*) fail pilot-home-inside-workspace ;; esac
-[[ -x "$codex_bin" && -f "$codex_bin" ]] || fail codex-binary-invalid
-[[ -f "$pilot_home/config.toml" && ! -L "$pilot_home/config.toml" ]] || fail pilot-config-missing
-cmp -s "$template" "$pilot_home/config.toml" || fail pilot-config-mismatch
-[[ "$($codex_bin --version)" == 'codex-cli 0.147.0' ]] || fail codex-version-mismatch
+case "$pilot_auth_home" in /mnt/c|/mnt/c/*) fail pilot-home-on-mnt-c ;; esac
+case "$pilot_auth_home/" in "$workspace/"*) fail pilot-home-inside-workspace ;; esac
+[ -x "$codex_bin" ] && [ -f "$codex_bin" ] && [ ! -L "$codex_bin" ] || fail codex-binary-invalid
+[ -x "$bwrap_bin" ] && [ -f "$bwrap_bin" ] && [ ! -L "$bwrap_bin" ] || fail bwrap-binary-invalid
+[ -f "$template" ] && [ ! -L "$template" ] || fail pilot-config-missing
+[ "$(/usr/bin/env -i HOME=/nonexistent PATH=/usr/bin:/bin "$codex_bin" --version)" = 'codex-cli 0.147.0' ] || fail codex-version-mismatch
 
-declare -a args=(
-  --die-with-parent --new-session
-  --unshare-user --unshare-pid --unshare-ipc --unshare-uts
-  --proc /proc --dev /dev --tmpfs /tmp
-  --dir /pilot-runtime
+# The durable pilot home is an auth-only store. The trusted host rejects every
+# other entry, including AGENTS.md, skills, hooks, plugins, MCP, and config files.
+"$node_bin" "$host" validate-pilot-auth-store
+
+runtime_parent="$state_root/runtime-homes"
+if [ -e "$runtime_parent" ]; then
+  [ -d "$runtime_parent" ] && [ ! -L "$runtime_parent" ] || fail runtime-home-parent-invalid
+else
+  /usr/bin/mkdir -- "$runtime_parent"
+fi
+[ "$(/usr/bin/readlink -f -- "$runtime_parent")" = "$runtime_parent" ] || fail runtime-home-parent-invalid
+/usr/bin/chmod 0700 "$runtime_parent"
+runtime_home="$(/usr/bin/mktemp -d "$runtime_parent/codex-home-XXXXXX")"
+cleanup() {
+  case "$runtime_home/" in "$runtime_parent/"*) /usr/bin/rm -rf -- "$runtime_home" ;; *) fail runtime-home-cleanup-unsafe ;; esac
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+/usr/bin/install -m 0600 "$template" "$runtime_home/config.toml"
+/usr/bin/install -m 0600 "$pilot_auth_home/auth.json" "$runtime_home/auth.json"
+
+# A one-use, host-only permit binds this launch to the claimed issue,
+# executionId, task hash, base SHA, owner UUID, and a 60-second lifetime.
+"$node_bin" "$host" consume-launch-permit
+
+set -- \
+  --die-with-parent --new-session \
+  --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-net \
+  --proc /proc --dev /dev --tmpfs /tmp \
+  --dir /pilot-runtime \
   --ro-bind "$codex_bin" /pilot-runtime/codex
-)
 
 for runtime_path in /usr /bin /lib /lib64; do
-  [[ -e "$runtime_path" ]] && args+=(--ro-bind "$runtime_path" "$runtime_path")
+  [ -e "$runtime_path" ] && set -- "$@" --ro-bind "$runtime_path" "$runtime_path"
 done
 
 for etc_file in /etc/hosts /etc/resolv.conf /etc/nsswitch.conf /etc/passwd /etc/group /etc/ssl/certs/ca-certificates.crt; do
-  if [[ -f "$etc_file" ]]; then
-    parent="$(dirname "$etc_file")"
-    while [[ "$parent" != / ]]; do args+=(--dir "$parent"); parent="$(dirname "$parent")"; done
-    args+=(--ro-bind "$etc_file" "$etc_file")
+  if [ -f "$etc_file" ]; then
+    parent=${etc_file%/*}
+    pending=''
+    while [ "$parent" != / ]; do pending="$parent $pending"; parent=${parent%/*}; [ -n "$parent" ] || parent=/; done
+    for directory in $pending; do set -- "$@" --dir "$directory"; done
+    set -- "$@" --ro-bind "$etc_file" "$etc_file"
   fi
 done
 
-add_parent_dirs() {
-  local current parent
-  current="$(dirname "$1")"
-  declare -a pending=()
-  while [[ "$current" != / ]]; do pending+=("$current"); current="$(dirname "$current")"; done
-  for (( parent=${#pending[@]}-1; parent>=0; parent-- )); do args+=(--dir "${pending[$parent]}"); done
-}
+# Bind destinations must exist inside the otherwise empty mount namespace.
+for mounted_path in "$workspace" "$runtime_home"; do
+  parent=${mounted_path%/*}
+  pending=''
+  while [ "$parent" != / ]; do pending="$parent $pending"; parent=${parent%/*}; [ -n "$parent" ] || parent=/; done
+  for directory in $pending; do set -- "$@" --dir "$directory"; done
+done
 
-add_parent_dirs "$workspace"
-add_parent_dirs "$pilot_home"
-args+=(
-  --bind "$workspace" "$workspace"
-  --bind "$pilot_home" "$pilot_home"
-  --clearenv
-  --setenv HOME "$pilot_home"
-  --setenv CODEX_HOME "$pilot_home"
-  --setenv PATH /pilot-runtime:/usr/bin:/bin
-  --setenv LANG C.UTF-8
+set -- "$@" \
+  --bind "$workspace" "$workspace" \
+  --bind "$runtime_home" "$runtime_home" \
+  --clearenv \
+  --setenv HOME "$runtime_home" \
+  --setenv CODEX_HOME "$runtime_home" \
+  --setenv PATH /pilot-runtime:/usr/bin:/bin \
+  --setenv LANG C.UTF-8 \
   --chdir "$workspace"
-)
 
-exec bwrap "${args[@]}" /pilot-runtime/codex app-server
+"$bwrap_bin" "$@" /pilot-runtime/codex app-server

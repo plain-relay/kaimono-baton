@@ -6,6 +6,18 @@ web_search = "disabled"
 check_for_update_on_startup = false
 include_apps_instructions = false
 include_permissions_instructions = true
+include_collaboration_mode_instructions = false
+include_environment_context = false
+
+[skills]
+include_instructions = false
+bundled = { enabled = false }
+
+[orchestrator.skills]
+enabled = false
+
+[orchestrator.mcp]
+enabled = false
 
 [features]
 apps = false
@@ -13,6 +25,7 @@ browser_use = false
 computer_use = false
 connectors = false
 external_migration = false
+hooks = false
 image_generation = false
 in_app_browser = false
 multi_agent = false

@@ -402,3 +402,12 @@ index 2475853..d9f9b79 100644
               "github_api",
               %{"method" => "GET", "path" => "/user"},
               github_client: fn _method, _path, _params, _body, _opts ->
+diff --git a/elixir/lib/symphony_elixir/workspace.ex b/elixir/lib/symphony_elixir/workspace.ex
+--- a/elixir/lib/symphony_elixir/workspace.ex
++++ b/elixir/lib/symphony_elixir/workspace.ex
+@@ -402,4 +402,4 @@ defmodule SymphonyElixir.Workspace do
+     task =
+       Task.async(fn ->
+-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
++        System.cmd("/bin/sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+       end)

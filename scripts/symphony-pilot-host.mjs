@@ -51,6 +51,21 @@ const PREPARED_KEYS = new Set([
   'schemaVersion', 'repository', 'issueNumber', 'issueIdentifier', 'executionId',
   'branchName', 'baseSha', 'task',
 ])
+const LAUNCH_PERMIT_KEYS = new Set([
+  'schemaVersion', 'issueNumber', 'executionId', 'taskHash', 'baseSha',
+  'ownerInstanceId', 'issuedAt', 'nonce',
+])
+const INSTANCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+export const CONTROL_MANIFEST_FILES = Object.freeze([
+  'scripts/symphony-pilot-codex.sh',
+  'scripts/symphony-pilot-host.mjs',
+  'scripts/symphony-pilot-isolation-test.mjs',
+  'scripts/symphony-pilot-trusted-launcher.sh',
+  'scripts/verify-symphony-pilot-upstream.mjs',
+  'symphony/WORKFLOW.md',
+  'symphony/codex/config.toml',
+  'symphony/patches/0001-disable-github-agent-tool.patch',
+].sort())
 
 const PROTECTED_EXACT = new Set([
   '.gitignore', '.npmrc', '.gitmodules', '.gitattributes', 'SECURITY.md', 'AGENTS.md',
@@ -59,12 +74,11 @@ const PROTECTED_EXACT = new Set([
   'docs/operations/AI_AGENT_POLICY.md',
   'docs/operations/AI_MERGE_APPROVAL.md',
   'docs/operations/SYMPHONY_PILOT.md',
-  'scripts/symphony-pilot-host.mjs',
-  'scripts/symphony-pilot-codex.sh',
-  'scripts/symphony-pilot-isolation-test.mjs',
-  'scripts/verify-symphony-pilot-upstream.mjs',
 ])
 const PROTECTED_ROOTS = new Set(['.git', '.github', '.codex', '.agents', 'symphony'])
+const PROTECTED_PREFIXES = Object.freeze([
+  'scripts/symphony-pilot-', 'scripts/verify-symphony-pilot-', 'scripts/install-symphony-pilot-',
+])
 
 export class PilotError extends Error {
   constructor(code) {
@@ -94,6 +108,7 @@ function validateStringArray(value, { min, max, item, code }) {
 
 export function isProtectedPath(repoPath) {
   if (PROTECTED_EXACT.has(repoPath)) return true
+  if (PROTECTED_PREFIXES.some((prefix) => repoPath.startsWith(prefix))) return true
   return PROTECTED_ROOTS.has(repoPath.split('/')[0])
 }
 
@@ -224,6 +239,86 @@ function safeInside(root, candidate) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
+export function pathsOverlap(left, right) {
+  const a = path.resolve(left)
+  const b = path.resolve(right)
+  return safeInside(a, b) || safeInside(b, a)
+}
+
+export function validateTrustedPathSeparation({ controlRoot, stateRoot: state, workspaceRoot, workspace, binaries = [] }) {
+  const control = path.resolve(controlRoot)
+  const durableState = path.resolve(state)
+  const workspaces = path.resolve(workspaceRoot)
+  const issueWorkspace = path.resolve(workspace)
+  assert(safeInside(workspaces, issueWorkspace), 'workspace-outside-pilot-root')
+  for (const [left, right] of [
+    [control, issueWorkspace], [control, workspaces], [control, durableState],
+    [durableState, issueWorkspace], [durableState, workspaces],
+  ]) assert(!pathsOverlap(left, right), 'trusted-path-overlap')
+  for (const binary of binaries) {
+    assert(!pathsOverlap(binary, issueWorkspace) && !pathsOverlap(binary, workspaces), 'trusted-binary-overlap')
+  }
+  return { controlRoot: control, stateRoot: durableState, workspaceRoot: workspaces, workspace: issueWorkspace }
+}
+
+function assertPosixTrusted(pathname, { rootOwned = false, directory = false } = {}) {
+  const stat = fs.lstatSync(pathname)
+  assert(!stat.isSymbolicLink() && (directory ? stat.isDirectory() : stat.isFile()), 'trusted-path-type-invalid')
+  if (process.platform === 'linux') {
+    assert(!rootOwned || stat.uid === 0, 'trusted-path-owner-invalid')
+    assert((stat.mode & 0o022) === 0, 'trusted-path-writable')
+    if (rootOwned) {
+      let current = directory ? pathname : path.dirname(pathname)
+      while (true) {
+        const ancestor = fs.lstatSync(current)
+        assert(ancestor.isDirectory() && !ancestor.isSymbolicLink() && ancestor.uid === 0, 'trusted-path-owner-invalid')
+        assert((ancestor.mode & 0o022) === 0, 'trusted-path-writable')
+        const parent = path.dirname(current)
+        if (parent === current) break
+        current = parent
+      }
+    }
+  }
+}
+
+export function verifyControlManifest(controlRoot, { requireRootOwner = process.platform === 'linux' } = {}) {
+  const control = fs.realpathSync(controlRoot)
+  assertPosixTrusted(control, { rootOwned: requireRootOwner, directory: true })
+  const manifest = path.join(control, 'symphony', 'control-manifest.sha256')
+  assertPosixTrusted(manifest, { rootOwned: requireRootOwner })
+  const lines = fs.readFileSync(manifest, 'utf8').trim().split(/\r?\n/).filter(Boolean)
+  const entries = lines.map((line) => {
+    const match = line.match(/^([0-9a-f]{64})  ([A-Za-z0-9_./@+-]+)$/)
+    assert(match, 'control-manifest-invalid')
+    validateRepoPath(match[2])
+    return { sha256: match[1], relativePath: match[2] }
+  })
+  assert(JSON.stringify(entries.map((entry) => entry.relativePath).sort()) === JSON.stringify(CONTROL_MANIFEST_FILES), 'control-manifest-path-set-mismatch')
+  for (const entry of entries) {
+    const target = path.resolve(control, entry.relativePath)
+    assert(safeInside(control, target), 'control-manifest-path-escape')
+    assertPosixTrusted(target, { rootOwned: requireRootOwner })
+    assert(fs.realpathSync(target) === target, 'control-file-not-canonical')
+    assert(fileHash(target) === entry.sha256, 'control-file-digest-mismatch')
+  }
+  return { controlRoot: control, manifest, entries }
+}
+
+export function validatePilotAuthStore(authRoot) {
+  const root = fs.realpathSync(authRoot)
+  const names = fs.readdirSync(root).sort()
+  assert(JSON.stringify(names) === JSON.stringify(['auth.json']), 'pilot-home-unexpected-content')
+  const authPath = path.join(root, 'auth.json')
+  const stat = fs.lstatSync(authPath)
+  assert(stat.isFile() && !stat.isSymbolicLink(), 'pilot-auth-invalid')
+  if (process.platform === 'linux') {
+    assert(stat.uid === process.getuid(), 'pilot-auth-owner-invalid')
+    assert((stat.mode & 0o077) === 0, 'pilot-auth-permissions-invalid')
+  }
+  assert(fs.realpathSync(authPath) === authPath, 'pilot-auth-invalid')
+  return authPath
+}
+
 export function readSafeJson(workspace, relativePath) {
   validateRepoPath(relativePath)
   const root = fs.realpathSync(workspace)
@@ -262,13 +357,21 @@ function writeExclusiveJson(workspace, relativePath, value) {
   try { fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
 }
 
-function stateRoot() {
+export function stateRoot() {
   const configured = process.env.SYMPHONY_PILOT_STATE_DIR?.trim()
   return path.resolve(configured || path.join(os.homedir(), '.local', 'state', 'kaimono-baton-symphony'))
 }
 
 function statePath(issueNumber) { return path.join(stateRoot(), `GH-${issueNumber}.json`) }
 function lockPath(issueNumber, executionId) { return path.join(stateRoot(), 'locks', `GH-${issueNumber}-${executionId}.lock`) }
+function issueLockPath(issueNumber) { return path.join(stateRoot(), 'locks', `GH-${issueNumber}.coordination.lock`) }
+function launchPermitPath(issueNumber, executionId) { return path.join(stateRoot(), 'launch-permits', `GH-${issueNumber}-${executionId}.json`) }
+
+export function currentInstanceId() {
+  const value = process.env.SYMPHONY_PILOT_INSTANCE_ID?.trim().toLowerCase()
+  assert(value && INSTANCE_ID.test(value), 'invalid-instance-id')
+  return value
+}
 
 function durableWriteJson(target, value) {
   const root = path.dirname(target)
@@ -299,9 +402,24 @@ export function acquireExecutionLock(root, issueNumber, executionId) {
   return lock
 }
 
+function acquireIssueLock(issueNumber) {
+  const lock = issueLockPath(issueNumber)
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 })
+  try { fs.mkdirSync(lock, { mode: 0o700 }) } catch (error) {
+    if (error?.code === 'EEXIST') throw new PilotError('issue-lock-held')
+    throw error
+  }
+  return lock
+}
+
 function releaseExecutionLock(lock) {
   const owner = path.join(lock, 'owner.json')
   if (fs.existsSync(owner)) fs.unlinkSync(owner)
+  fs.rmdirSync(lock)
+}
+
+
+function releaseIssueLock(lock) {
   fs.rmdirSync(lock)
 }
 
@@ -317,12 +435,114 @@ function writeState(issueNumber, state) {
   durableWriteJson(statePath(issueNumber), { ...state, updatedAt: new Date().toISOString() })
 }
 
+function writeExclusiveHostJson(target, value) {
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0)
+  const fd = fs.openSync(target, flags, 0o600)
+  try { fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+}
+
+function readHostJson(target) {
+  const stat = fs.lstatSync(target)
+  assert(stat.isFile() && !stat.isSymbolicLink(), 'host-json-invalid')
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+  try {
+    assert(fs.fstatSync(fd).isFile(), 'host-json-invalid')
+    return JSON.parse(fs.readFileSync(fd, 'utf8'))
+  } catch (error) {
+    if (error instanceof PilotError) throw error
+    throw new PilotError('host-json-invalid')
+  } finally { fs.closeSync(fd) }
+}
+
+export function validateLaunchPermit(permit, state, ownerInstanceId, now = Date.now()) {
+  exactKeys(permit, LAUNCH_PERMIT_KEYS, 'launch-permit-invalid')
+  assert(permit.schemaVersion === 1, 'launch-permit-invalid')
+  assert(Number.isSafeInteger(permit.issueNumber) && permit.issueNumber > 0, 'launch-permit-invalid')
+  assert(Number.isSafeInteger(permit.executionId) && permit.executionId > 0, 'launch-permit-invalid')
+  assert(SHA64.test(permit.taskHash) && SHA40.test(permit.baseSha), 'launch-permit-invalid')
+  assert(INSTANCE_ID.test(permit.ownerInstanceId) && permit.ownerInstanceId === ownerInstanceId, 'launch-permit-owner-mismatch')
+  assert(typeof permit.nonce === 'string' && /^[0-9a-f]{48}$/.test(permit.nonce), 'launch-permit-invalid')
+  const issuedAt = Date.parse(permit.issuedAt)
+  assert(Number.isFinite(issuedAt) && issuedAt <= now + 5_000 && now - issuedAt <= 60_000, 'launch-permit-expired')
+  assert(state?.state === 'claimed', 'launch-state-invalid')
+  assert(state.issueNumber === permit.issueNumber && state.executionId === permit.executionId, 'launch-permit-state-mismatch')
+  assert(state.taskHash === permit.taskHash && state.baseSha === permit.baseSha, 'launch-permit-state-mismatch')
+  assert(state.ownerInstanceId === permit.ownerInstanceId, 'launch-permit-owner-mismatch')
+  return permit
+}
+
+function issueLaunchPermit(issueNumber, state) {
+  const target = launchPermitPath(issueNumber, state.executionId)
+  assert(!fs.existsSync(target), 'launch-permit-already-exists')
+  writeExclusiveHostJson(target, {
+    schemaVersion: 1, issueNumber, executionId: state.executionId,
+    taskHash: state.taskHash, baseSha: state.baseSha,
+    ownerInstanceId: state.ownerInstanceId,
+    issuedAt: new Date().toISOString(), nonce: crypto.randomBytes(24).toString('hex'),
+  })
+}
+
+export function consumeLaunchPermit(cwd) {
+  const issueNumber = deriveIssueNumber(cwd)
+  const state = readState(issueNumber)
+  assert(state, 'persistent-state-missing')
+  const target = launchPermitPath(issueNumber, state.executionId)
+  assert(fs.existsSync(target), 'launch-permit-missing')
+  validateLaunchPermit(readHostJson(target), { ...state, issueNumber }, currentInstanceId())
+  const consumed = `${target}.consumed-${process.pid}-${crypto.randomBytes(8).toString('hex')}`
+  fs.renameSync(target, consumed)
+  fs.unlinkSync(consumed)
+  console.log(`[symphony-pilot] launch-permit-consumed GH-${issueNumber}`)
+}
+
+export function runIfExecutionOwner(state, ownerInstanceId, action) {
+  if (state?.ownerInstanceId !== ownerInstanceId) return { status: 'non-owner' }
+  return { status: 'owner', value: action() }
+}
+
 function childEnv(extra = {}) {
-  const env = {}
-  for (const key of ['PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL']) {
-    if (process.env[key]) env[key] = process.env[key]
+  const runtime = trustedRuntimePaths()
+  const hostTemp = path.join(stateRoot(), 'host-tmp')
+  fs.mkdirSync(hostTemp, { recursive: true, mode: 0o700 })
+  assertPosixTrusted(hostTemp, { directory: true })
+  assert(safeInside(fs.realpathSync(stateRoot()), fs.realpathSync(hostTemp)), 'trusted-temp-path-escape')
+  const env = {
+    PATH: runtime.path,
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TMPDIR: hostTemp,
   }
   return { ...env, ...extra }
+}
+
+const TRUSTED_BINARY_ENV = Object.freeze({
+  git: 'SYMPHONY_PILOT_GIT_BIN',
+  node: 'SYMPHONY_PILOT_NODE_BIN',
+  npm: 'SYMPHONY_PILOT_NPM_BIN',
+  bwrap: 'SYMPHONY_PILOT_BWRAP_BIN',
+  shell: 'SYMPHONY_PILOT_SHELL_BIN',
+})
+
+function trustedBinary(kind) {
+  const variable = TRUSTED_BINARY_ENV[kind]
+  const configured = process.env[variable]?.trim()
+  assert(configured && path.isAbsolute(configured), 'trusted-binary-missing')
+  const resolved = fs.realpathSync(configured)
+  assertPosixTrusted(resolved, { rootOwned: process.platform === 'linux' })
+  if (process.platform !== 'win32') assert((fs.statSync(resolved).mode & 0o111) !== 0, 'trusted-binary-not-executable')
+  return resolved
+}
+
+export function trustedRuntimePaths() {
+  const binaries = Object.fromEntries(Object.keys(TRUSTED_BINARY_ENV).map((kind) => [kind, trustedBinary(kind)]))
+  const configuredExecPath = process.env.SYMPHONY_PILOT_GIT_EXEC_PATH?.trim()
+  assert(configuredExecPath && path.isAbsolute(configuredExecPath), 'trusted-git-exec-path-missing')
+  const gitExecPath = fs.realpathSync(configuredExecPath)
+  assertPosixTrusted(gitExecPath, { rootOwned: process.platform === 'linux', directory: true })
+  const trustedDirectories = [...new Set(Object.values(binaries).map((binary) => path.dirname(binary)))]
+  for (const directory of trustedDirectories) assertPosixTrusted(directory, { rootOwned: process.platform === 'linux', directory: true })
+  return { ...binaries, gitExecPath, path: trustedDirectories.join(path.delimiter) }
 }
 
 function trustedGitHome() {
@@ -330,17 +550,24 @@ function trustedGitHome() {
   const home = path.join(root, 'home')
   const hooks = path.join(root, 'empty-hooks')
   const xdg = path.join(root, 'xdg')
-  for (const dir of [home, hooks, xdg]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  for (const dir of [root, home, hooks, xdg]) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    assertPosixTrusted(dir, { directory: true })
+    assert(safeInside(fs.realpathSync(stateRoot()), fs.realpathSync(dir)), 'trusted-git-path-escape')
+  }
+  for (const dir of [home, hooks, xdg]) assert(fs.readdirSync(dir).length === 0, 'trusted-git-directory-not-empty')
   return { home, hooks, xdg }
 }
 
 export function privilegedGitEnv(extra = {}) {
   const { home, hooks, xdg } = trustedGitHome()
+  const runtime = trustedRuntimePaths()
   return childEnv({
     HOME: home,
     XDG_CONFIG_HOME: xdg,
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: os.platform() === 'win32' ? 'NUL' : '/dev/null',
+    GIT_EXEC_PATH: runtime.gitExecPath,
     GIT_CONFIG_COUNT: '4',
     GIT_CONFIG_KEY_0: 'core.hooksPath',
     GIT_CONFIG_VALUE_0: hooks,
@@ -358,8 +585,8 @@ function run(cwd, command, args, { env = childEnv(), stdio = ['ignore', 'pipe', 
   try { return execFileSync(command, args, { cwd, env, stdio, encoding: 'utf8' }).trim() }
   catch { throw new PilotError(`${path.basename(command)}-command-failed`) }
 }
-function git(cwd, args, options = {}) { return run(cwd, 'git', args, options) }
-function privilegedGit(cwd, args, extraEnv = {}) { return git(cwd, args, { env: privilegedGitEnv(extraEnv) }) }
+function git(cwd, args, options = {}) { return run(cwd, trustedRuntimePaths().git, args, options) }
+export function privilegedGit(cwd, args, extraEnv = {}) { return git(cwd, args, { env: privilegedGitEnv(extraEnv) }) }
 
 function fileHash(file) { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') }
 function refsHash(cwd) { return crypto.createHash('sha256').update(privilegedGit(cwd, ['for-each-ref', '--format=%(refname) %(objectname)'])).digest('hex') }
@@ -396,9 +623,23 @@ function assertOrigin(cwd) {
   assert(pushUrls.length === 1 && pushUrls[0] === PILOT.repositoryUrl, 'unexpected-origin-url')
 }
 
+export function assertSafeLocalGitConfig(cwd) {
+  const keys = splitNull(privilegedGit(cwd, ['config', '--local', '--name-only', '--null', '--list'])).map((key) => key.toLowerCase())
+  const allowed = keys.every((key) =>
+    ['core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates', 'core.ignorecase', 'core.symlinks', 'remote.origin.url', 'remote.origin.fetch'].includes(key)
+    || /^branch\.[a-z0-9_./-]+\.(remote|merge)$/.test(key)
+  )
+  assert(allowed, 'unsafe-local-git-config')
+}
+
+function fetchOriginMain(cwd) {
+  try { privilegedGit(cwd, ['fetch', '--no-tags', '--depth', '1', 'origin', 'main']) }
+  catch { throw new PilotError('remote-transport-transient') }
+}
+
 function cleanToApprovedBase(cwd, baseSha) {
   assertOrigin(cwd)
-  privilegedGit(cwd, ['fetch', '--no-tags', '--depth', '1', 'origin', 'main'])
+  fetchOriginMain(cwd)
   const fetched = privilegedGit(cwd, ['rev-parse', PILOT.baseRef])
   assert(fetched === baseSha, 'base-moved')
   const branch = `codex/gh-${deriveIssueNumber(cwd)}`
@@ -472,9 +713,41 @@ async function ensureNoRemoteHandoff(issueNumber, branchName) {
 
 function verifyRuntimePins(cwd) {
   assert(process.platform === 'linux', 'wsl-linux-required')
-  const root = process.env.SYMPHONY_PILOT_SYMPHONY_ROOT?.trim()
-  const control = process.env.SYMPHONY_PILOT_CONTROL_ROOT?.trim()
-  assert(root && control, 'pilot-runtime-path-missing')
+  const configuredRoot = process.env.SYMPHONY_PILOT_SYMPHONY_ROOT?.trim()
+  const configuredControl = process.env.SYMPHONY_PILOT_CONTROL_ROOT?.trim()
+  const configuredWorkspaceRoot = process.env.SYMPHONY_PILOT_WORKSPACE_ROOT?.trim()
+  const configuredLauncher = process.env.SYMPHONY_PILOT_TRUSTED_LAUNCHER?.trim()
+  const configuredCodex = process.env.SYMPHONY_PILOT_CODEX_BIN?.trim()
+  const configuredAuthHome = process.env.SYMPHONY_PILOT_CODEX_HOME?.trim()
+  assert(configuredRoot && configuredControl && configuredWorkspaceRoot && configuredLauncher && configuredCodex && configuredAuthHome, 'pilot-runtime-path-missing')
+  const root = fs.realpathSync(configuredRoot)
+  const controlManifest = verifyControlManifest(configuredControl)
+  const control = controlManifest.controlRoot
+  const workspace = fs.realpathSync(cwd)
+  const workspaceRoot = fs.realpathSync(configuredWorkspaceRoot)
+  const durableState = fs.realpathSync(stateRoot())
+  const launcher = fs.realpathSync(configuredLauncher)
+  const codex = fs.realpathSync(configuredCodex)
+  const authHome = fs.realpathSync(configuredAuthHome)
+  const runtime = trustedRuntimePaths()
+  assertPosixTrusted(workspaceRoot, { directory: true })
+  assertPosixTrusted(durableState, { directory: true })
+  assertPosixTrusted(root, { directory: true })
+  assertPosixTrusted(authHome, { directory: true })
+  validatePilotAuthStore(authHome)
+  assertPosixTrusted(launcher, { rootOwned: true })
+  assertPosixTrusted(codex, { rootOwned: true })
+  assert(!safeInside(control, launcher), 'trusted-launcher-inside-control-root')
+  const launcherEntry = controlManifest.entries.find((entry) => entry.relativePath === 'scripts/symphony-pilot-trusted-launcher.sh')
+  assert(launcherEntry && fileHash(launcher) === launcherEntry.sha256, 'trusted-launcher-integrity-failed')
+  validateTrustedPathSeparation({
+    controlRoot: control, stateRoot: durableState, workspaceRoot, workspace,
+    binaries: [launcher, codex, runtime.git, runtime.node, runtime.npm, runtime.bwrap, runtime.shell, runtime.gitExecPath],
+  })
+  assert(!pathsOverlap(authHome, workspace) && !pathsOverlap(authHome, workspaceRoot) && !pathsOverlap(authHome, control), 'pilot-auth-path-overlap')
+  assert(fs.realpathSync(path.join(control, 'scripts', 'symphony-pilot-host.mjs')) === fs.realpathSync(process.argv[1]), 'untrusted-host-entrypoint')
+  assert(fs.realpathSync(path.join(control, 'scripts', 'symphony-pilot-codex.sh')) === path.join(control, 'scripts', 'symphony-pilot-codex.sh'), 'untrusted-wrapper-path')
+  assert(fs.realpathSync(path.join(control, 'symphony', 'codex', 'config.toml')) === path.join(control, 'symphony', 'codex', 'config.toml'), 'untrusted-config-path')
   assert(privilegedGit(root, ['rev-parse', 'HEAD']) === PILOT.symphonySha, 'symphony-version-mismatch')
   const changed = privilegedGit(root, ['diff', '--name-only']).split(/\r?\n/).filter(Boolean).sort()
   assert(JSON.stringify(changed) === JSON.stringify([
@@ -482,6 +755,7 @@ function verifyRuntimePins(cwd) {
     'elixir/lib/symphony_elixir/config.ex',
     'elixir/lib/symphony_elixir/config/schema.ex',
     'elixir/lib/symphony_elixir/github/adapter.ex',
+    'elixir/lib/symphony_elixir/workspace.ex',
     'elixir/test/symphony_elixir/app_server_test.exs',
     'elixir/test/symphony_elixir/github_adapter_test.exs',
   ]), 'symphony-patch-mismatch')
@@ -492,7 +766,7 @@ function verifyRuntimePins(cwd) {
 function runNpmCi(cwd) {
   const home = path.join(stateRoot(), 'npm-home')
   fs.mkdirSync(home, { recursive: true, mode: 0o700 })
-  run(cwd, 'npm', ['ci'], {
+  run(cwd, trustedRuntimePaths().npm, ['ci'], {
     stdio: 'inherit',
     env: childEnv({ HOME: home, XDG_CONFIG_HOME: path.join(home, 'xdg'), CI: 'true', npm_config_audit: 'false', npm_config_fund: 'false' }),
   })
@@ -515,30 +789,31 @@ function workspaceIndexPath(cwd) {
 }
 
 async function prepare(cwd) {
-  verifyRuntimePins(cwd)
   const issueNumber = deriveIssueNumber(cwd)
-  const first = await fetchIssueSnapshot(issueNumber)
-  const task = validateIssueSnapshot(first)
-  const lock = acquireExecutionLock(stateRoot(), issueNumber, task.executionId)
+  const ownerInstanceId = currentInstanceId()
+  const issueLock = acquireIssueLock(issueNumber)
+  let task = null
+  let executionLock = null
   try {
+    verifyRuntimePins(cwd)
+    const first = await fetchIssueSnapshot(issueNumber)
+    task = validateIssueSnapshot(first)
     const existing = readState(issueNumber)
     if (existing) {
       assert(task.executionId > existing.executionId, 'stale-execution-id')
       assert(existing.state === 'blocked', 'prior-execution-not-retryable')
     }
+    executionLock = acquireExecutionLock(stateRoot(), issueNumber, task.executionId)
+    writeState(issueNumber, {
+      schemaVersion: 3, state: 'preparing', issueNumber, executionId: task.executionId,
+      taskHash: taskHash(task), baseSha: task.baseSha,
+      branchName: `codex/gh-${issueNumber}`, ownerInstanceId,
+      claimGeneration: crypto.randomBytes(16).toString('hex'),
+    })
     // No other process may mutate this deterministic execution workspace after this point.
     const branchName = cleanToApprovedBase(cwd, task.baseSha)
     for (const referencePath of task.referencePaths) validateReferencePathAtBase(cwd, task.baseSha, referencePath)
     await ensureNoRemoteHandoff(issueNumber, branchName)
-    // Exact revalidation is immediately adjacent to the durable exclusive transition.
-    const current = await fetchIssueSnapshot(issueNumber)
-    const currentTask = validateIssueSnapshot(current, task)
-    privilegedGit(cwd, ['fetch', '--no-tags', '--depth', '1', 'origin', 'main'])
-    assert(privilegedGit(cwd, ['rev-parse', PILOT.baseRef]) === currentTask.baseSha, 'base-moved')
-    writeState(issueNumber, {
-      schemaVersion: 2, state: 'preparing', executionId: task.executionId,
-      taskHash: taskHash(task), baseSha: task.baseSha, branchName,
-    })
     runNpmCi(cwd)
     const prepared = {
       schemaVersion: 2, repository: PILOT.repository, issueNumber,
@@ -550,42 +825,61 @@ async function prepare(cwd) {
     fs.mkdirSync(symphonyDir, { mode: 0o700 })
     writeExclusiveJson(cwd, '.symphony/task.json', prepared)
     const index = workspaceIndexPath(cwd)
-    writeState(issueNumber, {
-      schemaVersion: 2, state: 'claimed', executionId: task.executionId,
+    // This final remote read is the authorization boundary. Later Issue edits do not revoke this claim.
+    const current = await fetchIssueSnapshot(issueNumber)
+    const currentTask = validateIssueSnapshot(current, task)
+    fetchOriginMain(cwd)
+    assert(privilegedGit(cwd, ['rev-parse', PILOT.baseRef]) === currentTask.baseSha, 'base-moved')
+    const claimed = {
+      schemaVersion: 3, state: 'claimed', issueNumber, executionId: task.executionId,
       taskHash: taskHash(task), baseSha: task.baseSha, branchName,
+      ownerInstanceId, claimedAt: new Date().toISOString(),
+      claimGeneration: crypto.randomBytes(16).toString('hex'),
       gitConfigHash: fileHash(path.join(cwd, '.git', 'config')),
       indexHash: fileHash(index), refsHash: refsHash(cwd),
       baseTreeSha: privilegedGit(cwd, ['rev-parse', `${task.baseSha}^{tree}`]),
-    })
-  } catch (error) {
-    const blockerCode = permanentBlocker(error)
-    const state = readState(issueNumber)
-    if (blockerCode && state?.executionId === task.executionId && state.state === 'preparing') {
-      writeState(issueNumber, { ...state, state: 'blocked', blockerCode })
-    } else if (blockerCode && state?.executionId !== task.executionId) {
-      writeState(issueNumber, {
-        schemaVersion: 2, state: 'blocked', executionId: task.executionId,
-        taskHash: taskHash(task), baseSha: task.baseSha,
-        branchName: `codex/gh-${issueNumber}`, blockerCode,
-      })
     }
+    writeState(issueNumber, claimed)
+    issueLaunchPermit(issueNumber, claimed)
+  } catch (error) {
+    const blockerCode = persistPermanentPrepareFailure(issueNumber, ownerInstanceId, task, error)
     if (blockerCode) {
       // This is the last operation in the failed prepare phase; no npm/test/application command follows credential use.
       try { await removeLabel(issueNumber) } catch {}
     }
     throw error
-  } finally { releaseExecutionLock(lock) }
+  } finally {
+    if (executionLock) releaseExecutionLock(executionLock)
+    releaseIssueLock(issueLock)
+  }
   console.log(`[symphony-pilot] claimed GH-${issueNumber}`)
 }
 
-function permanentBlocker(error) {
+export function permanentBlocker(error) {
   const code = error instanceof PilotError ? error.code : 'other'
-  if (code === 'github-transient-failure') return null
+  if (['github-transient-failure', 'remote-transport-transient', 'issue-lock-held', 'execution-lock-held'].includes(code)) return null
   if (code === 'base-moved') return 'base-moved'
   if (code.startsWith('reference')) return 'reference-invalid'
   if (code.includes('approval') || code.includes('label') || code.includes('issue')) return 'approval-stale'
   if (code.includes('npm')) return 'validation-failed'
   return 'repository-state-conflict'
+}
+
+export function persistPermanentPrepareFailure(issueNumber, ownerInstanceId, task, error) {
+  const blockerCode = permanentBlocker(error)
+  if (!blockerCode) return null
+  const state = readState(issueNumber)
+  if (task && state?.executionId === task.executionId && state.state === 'preparing' && state.ownerInstanceId === ownerInstanceId) {
+    writeState(issueNumber, { ...state, state: 'blocked', blockerCode })
+  } else if (!state) {
+    writeState(issueNumber, {
+      schemaVersion: 3, state: 'blocked', issueNumber,
+      executionId: task?.executionId ?? 0,
+      taskHash: task ? taskHash(task) : null, baseSha: task?.baseSha ?? null,
+      branchName: `codex/gh-${issueNumber}`, ownerInstanceId, blockerCode,
+    })
+  }
+  return blockerCode
 }
 
 function splitNull(output) { return output.split('\0').filter(Boolean) }
@@ -596,17 +890,13 @@ export function collectChangedPaths(cwd, baseSha) {
   return [...new Set([...tracked, ...untracked])].filter((name) => !name.startsWith('.symphony/')).sort()
 }
 
-function modeForPath(cwd, baseSha, repoPath) {
-  const existing = privilegedGit(cwd, ['ls-tree', baseSha, '--', repoPath])
-  if (existing) {
-    const entry = parseLsTreeRecord(`${existing}\0`, repoPath)
-    assert(entry.type === 'blob' && ['100644', '100755'].includes(entry.mode), 'unsafe-file-type')
-    return entry.mode
-  }
-  return '100644'
+function baseTreeEntry(cwd, baseSha, repoPath) {
+  const existing = privilegedGit(cwd, ['ls-tree', '-z', baseSha, '--', repoPath])
+  return existing ? parseLsTreeRecord(`${existing}\0`, repoPath) : null
 }
 
-export function buildValidatedTree(cwd, baseSha, changedPaths, scopePaths) {
+export function buildValidatedTree(cwd, baseSha, changedPaths, scopePaths, changeMode) {
+  assert(CHANGE_MODES.has(changeMode), 'invalid-change-mode')
   fs.mkdirSync(stateRoot(), { recursive: true, mode: 0o700 })
   const tempIndexDir = fs.mkdtempSync(path.join(stateRoot(), 'index-'))
   const indexFile = path.join(tempIndexDir, 'index')
@@ -615,15 +905,19 @@ export function buildValidatedTree(cwd, baseSha, changedPaths, scopePaths) {
     privilegedGit(cwd, ['read-tree', baseSha], env)
     for (const repoPath of changedPaths) {
       assert(isPathAllowed(repoPath, scopePaths), 'change-outside-allowed-scope')
+      const baseEntry = baseTreeEntry(cwd, baseSha, repoPath)
+      if (baseEntry) assert(baseEntry.type === 'blob' && ['100644', '100755'].includes(baseEntry.mode), 'unsafe-file-type')
       const absolute = path.join(cwd, repoPath)
-      if (!fs.existsSync(absolute)) {
-        privilegedGit(cwd, ['update-index', '--force-remove', '--', repoPath], env)
-        continue
-      }
+      const outputExists = fs.existsSync(absolute)
+      // No approved pilot mode authorizes deletion. The remaining semantics are
+      // evaluated against the exact approved base tree, not the working diff.
+      assert(outputExists, 'change-mode-deletion-forbidden')
+      if (changeMode === 'modify-existing') assert(baseEntry, 'change-mode-add-forbidden')
+      if (changeMode === 'add-file') assert(!baseEntry, 'change-mode-overwrite-forbidden')
       const stat = fs.lstatSync(absolute)
       assert(stat.isFile() && !stat.isSymbolicLink(), 'unsafe-file-type')
       const blob = privilegedGit(cwd, ['hash-object', '-w', '--no-filters', '--', repoPath])
-      const mode = modeForPath(cwd, baseSha, repoPath)
+      const mode = baseEntry?.mode ?? '100644'
       privilegedGit(cwd, ['update-index', '--add', '--cacheinfo', `${mode},${blob},${repoPath}`], env)
     }
     const treeSha = privilegedGit(cwd, ['write-tree'], env)
@@ -666,6 +960,9 @@ export function validateAgentGitState(cwd, prepared, state) {
 function pushPersistedCommit(cwd, state) {
   assert(state.branchName === `codex/gh-${deriveIssueNumber(cwd)}`, 'unexpected-push-branch')
   assert(SHA40.test(state.commitSha), 'invalid-persisted-commit')
+  assertOrigin(cwd)
+  assertSafeLocalGitConfig(cwd)
+  trustedRuntimePaths()
   const token = process.env.GITHUB_TOKEN
   assert(typeof token === 'string' && token.length > 0, 'missing-github-token')
   const encoded = Buffer.from(`x-access-token:${token}`).toString('base64')
@@ -729,10 +1026,17 @@ async function removeLabel(issueNumber) {
 }
 
 async function finalize(cwd) {
-  verifyRuntimePins(cwd)
   const issueNumber = deriveIssueNumber(cwd)
   let state = readState(issueNumber)
   assert(state, 'persistent-state-missing')
+  const ownerInstanceId = currentInstanceId()
+  if (runIfExecutionOwner(state, ownerInstanceId, () => true).status === 'non-owner') {
+    // A losing Symphony process must not inspect another owner's workspace handoff,
+    // alter its state, remove its label, commit, push, or update its PR.
+    console.log(`[symphony-pilot] non-owner-finalize-noop GH-${issueNumber}`)
+    return
+  }
+  verifyRuntimePins(cwd)
   if (state.state === 'completed') { await removeLabel(issueNumber); return }
   if (state.state === 'finalizing') {
     // Recovery trusts only the already validated and durably persisted object identity.
@@ -758,7 +1062,7 @@ async function finalize(cwd) {
       validateAgentGitState(cwd, prepared, state)
       const changedPaths = collectChangedPaths(cwd, prepared.baseSha)
       assert(changedPaths.length > 0, 'no-implementation-change')
-      const treeSha = buildValidatedTree(cwd, prepared.baseSha, changedPaths, prepared.task.scopePaths)
+      const treeSha = buildValidatedTree(cwd, prepared.baseSha, changedPaths, prepared.task.scopePaths, prepared.task.changeMode)
       const commitSha = createCommitObject(cwd, treeSha, prepared.baseSha, issueNumber)
       state = { ...state, state: 'finalizing', treeSha, commitSha, changedPaths }
       // The exact commit is durable before the branch ref is changed.
@@ -775,7 +1079,7 @@ async function finalize(cwd) {
     console.log(`[symphony-pilot] completed GH-${issueNumber}`)
   } catch (error) {
     const latest = readState(issueNumber)
-    if (latest?.state === 'claimed') {
+    if (latest?.state === 'claimed' && latest.ownerInstanceId === ownerInstanceId) {
       writeState(issueNumber, { ...latest, state: 'blocked', blockerCode: error instanceof PilotError && BLOCKERS.has(error.code) ? error.code : 'repository-state-conflict' })
       try { await removeLabel(issueNumber) } catch {}
     }
@@ -799,6 +1103,11 @@ async function main() {
   try {
     if (mode === 'prepare') await prepare(process.cwd())
     else if (mode === 'finalize') await finalize(process.cwd())
+    else if (mode === 'consume-launch-permit') { verifyRuntimePins(process.cwd()); consumeLaunchPermit(process.cwd()) }
+    else if (mode === 'validate-pilot-auth-store') {
+      verifyRuntimePins(process.cwd())
+      validatePilotAuthStore(process.env.SYMPHONY_PILOT_CODEX_HOME?.trim() || '')
+    }
     else if (mode === 'operator-block') operatorBlock(Number(issueArg), Number(executionArg))
     else throw new PilotError('usage')
   } catch (error) {

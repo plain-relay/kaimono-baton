@@ -9,6 +9,7 @@ const EXPECTED = [
   'elixir/lib/symphony_elixir/config.ex',
   'elixir/lib/symphony_elixir/config/schema.ex',
   'elixir/lib/symphony_elixir/github/adapter.ex',
+  'elixir/lib/symphony_elixir/workspace.ex',
   'elixir/test/symphony_elixir/app_server_test.exs',
   'elixir/test/symphony_elixir/github_adapter_test.exs',
 ].sort()
