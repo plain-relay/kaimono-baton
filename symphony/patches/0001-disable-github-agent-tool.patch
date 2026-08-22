@@ -1,12 +1,404 @@
+diff --git a/elixir/lib/symphony_elixir/codex/app_server.ex b/elixir/lib/symphony_elixir/codex/app_server.ex
+index ae3db62..2f89e19 100644
+--- a/elixir/lib/symphony_elixir/codex/app_server.ex
++++ b/elixir/lib/symphony_elixir/codex/app_server.ex
+@@ -16,6 +16,7 @@ defmodule SymphonyElixir.Codex.AppServer do
+           metadata: map(),
+           approval_policy: String.t() | map(),
+           auto_approve_requests: boolean(),
++          permission_profile: String.t() | nil,
+           thread_sandbox: String.t(),
+           turn_sandbox_policy: map(),
+           thread_id: String.t(),
+@@ -53,6 +54,7 @@ defmodule SymphonyElixir.Codex.AppServer do
+            metadata: metadata,
+            approval_policy: session_policies.approval_policy,
+            auto_approve_requests: session_policies.approval_policy == "never",
++           permission_profile: session_policies.permission_profile,
+            thread_sandbox: session_policies.thread_sandbox,
+            turn_sandbox_policy: session_policies.turn_sandbox_policy,
+            thread_id: thread_id,
+@@ -75,6 +77,7 @@ defmodule SymphonyElixir.Codex.AppServer do
+           metadata: metadata,
+           approval_policy: approval_policy,
+           auto_approve_requests: auto_approve_requests,
++          permission_profile: permission_profile,
+           turn_sandbox_policy: turn_sandbox_policy,
+           thread_id: thread_id,
+           workspace: workspace,
+@@ -91,7 +94,29 @@ defmodule SymphonyElixir.Codex.AppServer do
+         DynamicTool.execute(tool, arguments, dynamic_tool_binding, issue: issue)
+       end)
+
+-    case start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
++    tool_executor =
++      if is_binary(permission_profile) do
++        fn _tool, _arguments ->
++          %{
++            "success" => false,
++            "output" => "external-tool-disabled",
++            "pilotFailClosed" => true
++          }
++        end
++      else
++        tool_executor
++      end
++
++    case start_turn(
++           port,
++           thread_id,
++           prompt,
++           issue,
++           workspace,
++           approval_policy,
++           turn_sandbox_policy,
++           permission_profile
++         ) do
+       {:ok, turn_id} ->
+         session_id = "#{thread_id}-#{turn_id}"
+         Logger.info("Codex session started for #{issue_context(issue)} session_id=#{session_id}")
+@@ -314,25 +339,42 @@ defmodule SymphonyElixir.Codex.AppServer do
+   defp start_thread(
+          port,
+          workspace,
+-         %{approval_policy: approval_policy, thread_sandbox: thread_sandbox},
++         %{
++           approval_policy: approval_policy,
++           thread_sandbox: thread_sandbox,
++           permission_profile: permission_profile
++         },
+          dynamic_tool_binding
+        ) do
++    legacy_params = %{
++      "approvalPolicy" => approval_policy,
++      "sandbox" => thread_sandbox,
++      "cwd" => workspace,
++      "dynamicTools" => dynamic_tool_binding.tool_specs
++    }
++
++    pilot_params = %{
++      "approvalPolicy" => approval_policy,
++      "permissions" => permission_profile,
++      "cwd" => workspace,
++      "environments" => [],
++      "selectedCapabilityRoots" => [],
++      "dynamicTools" => []
++    }
++
+     send_message(port, %{
+       "method" => "thread/start",
+       "id" => @thread_start_id,
+-      "params" => %{
+-        "approvalPolicy" => approval_policy,
+-        "sandbox" => thread_sandbox,
+-        "cwd" => workspace,
+-        "dynamicTools" => dynamic_tool_binding.tool_specs
+-      }
++      "params" => if(is_binary(permission_profile), do: pilot_params, else: legacy_params)
+     })
+
+     case await_response(port, @thread_start_id) do
+-      {:ok, %{"thread" => thread_payload}} ->
+-        case thread_payload do
+-          %{"id" => thread_id} -> {:ok, thread_id}
+-          _ -> {:error, {:invalid_thread_payload, thread_payload}}
++      {:ok, %{"thread" => thread_payload} = response} ->
++        with :ok <- validate_active_permission_profile(response, permission_profile) do
++          case thread_payload do
++            %{"id" => thread_id} -> {:ok, thread_id}
++            _ -> {:error, {:invalid_thread_payload, thread_payload}}
++          end
+         end
+
+       other ->
+@@ -340,23 +382,47 @@ defmodule SymphonyElixir.Codex.AppServer do
+     end
+   end
+
+-  defp start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
++  defp validate_active_permission_profile(_response, nil), do: :ok
++
++  defp validate_active_permission_profile(
++         %{"activePermissionProfile" => %{"id" => expected}},
++         expected
++       ),
++       do: :ok
++
++  defp validate_active_permission_profile(response, expected) do
++    {:error, {:active_permission_profile_mismatch, expected, response["activePermissionProfile"]}}
++  end
++
++  defp start_turn(
++         port,
++         thread_id,
++         prompt,
++         issue,
++         workspace,
++         approval_policy,
++         turn_sandbox_policy,
++         permission_profile
++       ) do
++    legacy_params = %{
++      "threadId" => thread_id,
++      "input" => [%{"type" => "text", "text" => prompt}],
++      "cwd" => workspace,
++      "title" => issue.identifier,
++      "approvalPolicy" => approval_policy,
++      "sandboxPolicy" => turn_sandbox_policy
++    }
++
++    pilot_params =
++      legacy_params
++      |> Map.delete("sandboxPolicy")
++      |> Map.put("permissions", permission_profile)
++      |> Map.put("environments", [])
++
+     send_message(port, %{
+       "method" => "turn/start",
+       "id" => @turn_start_id,
+-      "params" => %{
+-        "threadId" => thread_id,
+-        "input" => [
+-          %{
+-            "type" => "text",
+-            "text" => prompt
+-          }
+-        ],
+-        "cwd" => workspace,
+-        "title" => "#{issue.identifier}: #{issue.title}",
+-        "approvalPolicy" => approval_policy,
+-        "sandboxPolicy" => turn_sandbox_policy
+-      }
++      "params" => if(is_binary(permission_profile), do: pilot_params, else: legacy_params)
+     })
+
+     case await_response(port, @turn_start_id) do
+@@ -535,6 +601,16 @@ defmodule SymphonyElixir.Codex.AppServer do
+
+         {:error, {:approval_required, payload}}
+
++      :external_tool_requested ->
++        emit_message(
++          on_message,
++          :unsupported_tool_call,
++          %{payload: payload, raw: payload_string},
++          metadata
++        )
++
++        {:error, {:external_tool_requested, payload}}
++
+       :unhandled ->
+         if needs_input?(method, payload) do
+           emit_message(
+@@ -616,7 +692,7 @@ defmodule SymphonyElixir.Codex.AppServer do
+
+     emit_message(on_message, event, %{payload: payload, raw: payload_string}, metadata)
+
+-    :approved
++    if result["pilotFailClosed"] == true, do: :external_tool_requested, else: :approved
+   end
+
+   defp maybe_handle_approval_request(
+diff --git a/elixir/lib/symphony_elixir/config.ex b/elixir/lib/symphony_elixir/config.ex
+index ae4cb0b..d185735 100644
+--- a/elixir/lib/symphony_elixir/config.ex
++++ b/elixir/lib/symphony_elixir/config.ex
+@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Config do
+
+   @type codex_runtime_settings :: %{
+           approval_policy: String.t() | map(),
++          permission_profile: String.t() | nil,
+           thread_sandbox: String.t(),
+           turn_sandbox_policy: map()
+         }
+@@ -106,6 +107,7 @@ defmodule SymphonyElixir.Config do
+         {:ok,
+          %{
+            approval_policy: settings.codex.approval_policy,
++           permission_profile: settings.codex.permission_profile,
+            thread_sandbox: settings.codex.thread_sandbox,
+            turn_sandbox_policy: turn_sandbox_policy
+          }}
+diff --git a/elixir/lib/symphony_elixir/config/schema.ex b/elixir/lib/symphony_elixir/config/schema.ex
+index 6ebb278..e827f09 100644
+--- a/elixir/lib/symphony_elixir/config/schema.ex
++++ b/elixir/lib/symphony_elixir/config/schema.ex
+@@ -191,6 +191,7 @@ defmodule SymphonyElixir.Config.Schema do
+       )
+
+       field(:thread_sandbox, :string, default: "workspace-write")
++      field(:permission_profile, :string)
+       field(:turn_sandbox_policy, :map)
+       field(:turn_timeout_ms, :integer, default: 3_600_000)
+       field(:read_timeout_ms, :integer, default: 5_000)
+@@ -206,6 +207,7 @@ defmodule SymphonyElixir.Config.Schema do
+           :command,
+           :approval_policy,
+           :thread_sandbox,
++          :permission_profile,
+           :turn_sandbox_policy,
+           :turn_timeout_ms,
+           :read_timeout_ms,
 diff --git a/elixir/lib/symphony_elixir/github/adapter.ex b/elixir/lib/symphony_elixir/github/adapter.ex
+index 5a77016..018234b 100644
 --- a/elixir/lib/symphony_elixir/github/adapter.ex
 +++ b/elixir/lib/symphony_elixir/github/adapter.ex
-@@ -32,7 +32,7 @@ defmodule SymphonyElixir.GitHub.Adapter do
+@@ -5,7 +5,7 @@ defmodule SymphonyElixir.GitHub.Adapter do
+
+   @behaviour SymphonyElixir.Tracker
+
+-  alias SymphonyElixir.GitHub.{AgentTool, Client}
++  alias SymphonyElixir.GitHub.Client
+   alias SymphonyElixir.Tracker.Issue
+
+   @active_states ["open"]
+@@ -36,10 +36,18 @@ defmodule SymphonyElixir.GitHub.Adapter do
    def fetch_issues_by_ids(issue_ids), do: client_module().fetch_issues_by_ids(issue_ids)
- 
+
    @spec agent_tool_specs() :: [map()]
 -  def agent_tool_specs, do: AgentTool.tool_specs()
 +  def agent_tool_specs, do: []
- 
+
    @spec execute_agent_tool(String.t(), term(), keyword()) :: map()
-   def execute_agent_tool(tool, arguments, opts), do: AgentTool.execute(tool, arguments, opts)
+-  def execute_agent_tool(tool, arguments, opts), do: AgentTool.execute(tool, arguments, opts)
++  def execute_agent_tool(_tool, _arguments, _opts) do
++    %{
++      "success" => false,
++      "output" => "github-provider-tool-disabled",
++      "contentItems" => [
++        %{"type" => "inputText", "text" => "github-provider-tool-disabled"}
++      ]
++    }
++  end
+
+   @spec secret_environment_names(map()) :: [String.t()]
+   def secret_environment_names(tracker_settings), do: Client.secret_environment_names(tracker_settings)
+diff --git a/elixir/test/symphony_elixir/app_server_test.exs b/elixir/test/symphony_elixir/app_server_test.exs
+index 4b23aed..929752d 100644
+--- a/elixir/test/symphony_elixir/app_server_test.exs
++++ b/elixir/test/symphony_elixir/app_server_test.exs
+@@ -1,6 +1,99 @@
+ defmodule SymphonyElixir.AppServerTest do
+   use SymphonyElixir.TestSupport
+
++  test "pilot request path excludes raw issue data and pins capabilities and permissions" do
++    test_root = Path.join(System.tmp_dir!(), "symphony-pilot-request-#{System.unique_integer([:positive])}")
++
++    try do
++      workspace_root = Path.join(test_root, "workspaces")
++      workspace = Path.join(workspace_root, "GH-6")
++      codex_binary = Path.join(test_root, "fake-codex")
++      trace_file = Path.join(test_root, "trace")
++      File.mkdir_p!(workspace)
++
++      File.write!(codex_binary, """
++      #!/bin/sh
++      count=0
++      while IFS= read -r line; do
++        count=$((count + 1))
++        printf '%s\n' "$line" >> "#{trace_file}"
++        case "$count" in
++          1) printf '%s\n' '{"id":1,"result":{}}' ;;
++          2) ;;
++          3) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-pilot"},"activePermissionProfile":{"id":"symphony-pilot","extends":null}}}' ;;
++          4) printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-pilot"}}}'; printf '%s\n' '{"method":"turn/completed"}'; exit 0 ;;
++        esac
++      done
++      """)
++      File.chmod!(codex_binary, 0o755)
++      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root, codex_command: "#{codex_binary} app-server")
++      workflow = File.read!(Workflow.workflow_file_path())
++      File.write!(Workflow.workflow_file_path(), String.replace(workflow, "  thread_sandbox:", "  permission_profile: symphony-pilot\n  thread_sandbox:"))
++
++      issue = %Issue{
++        id: "raw-id",
++        identifier: "GH-6",
++        title: "RAW TITLE MUST NOT PASS",
++        description: "RAW DESCRIPTION MUST NOT PASS",
++        state: "open",
++        url: "https://raw.invalid/issue/6",
++        labels: ["codex-ready"]
++      }
++
++      assert {:ok, _} = AppServer.run(workspace, "safe prompt", issue)
++      payloads = File.stream!(trace_file) |> Enum.map(&Jason.decode!/1)
++      thread = Enum.find(payloads, &(&1["method"] == "thread/start"))
++      turn = Enum.find(payloads, &(&1["method"] == "turn/start"))
++      assert thread["params"]["permissions"] == "symphony-pilot"
++      assert thread["params"]["environments"] == []
++      assert thread["params"]["selectedCapabilityRoots"] == []
++      assert thread["params"]["dynamicTools"] == []
++      refute Map.has_key?(thread["params"], "sandbox")
++      assert turn["params"]["permissions"] == "symphony-pilot"
++      assert turn["params"]["environments"] == []
++      assert turn["params"]["title"] == "GH-6"
++      refute Map.has_key?(turn["params"], "sandboxPolicy")
++      encoded = Jason.encode!(turn)
++      refute encoded =~ issue.title
++      refute encoded =~ issue.description
++      refute encoded =~ issue.url
++      refute encoded =~ "codex-ready"
++    after
++      File.rm_rf(test_root)
++    end
++  end
++
++  test "pilot blocks profile mismatch before turn start" do
++    test_root = Path.join(System.tmp_dir!(), "symphony-pilot-profile-#{System.unique_integer([:positive])}")
++
++    try do
++      workspace_root = Path.join(test_root, "workspaces")
++      workspace = Path.join(workspace_root, "GH-6")
++      codex_binary = Path.join(test_root, "fake-codex")
++      File.mkdir_p!(workspace)
++      File.write!(codex_binary, """
++      #!/bin/sh
++      count=0
++      while IFS= read -r _line; do
++        count=$((count + 1))
++        case "$count" in
++          1) printf '%s\n' '{"id":1,"result":{}}' ;;
++          2) ;;
++          3) printf '%s\n' '{"id":2,"result":{"thread":{"id":"bad"},"activePermissionProfile":{"id":":workspace","extends":null}}}'; sleep 1; exit 0 ;;
++        esac
++      done
++      """)
++      File.chmod!(codex_binary, 0o755)
++      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root, codex_command: "#{codex_binary} app-server")
++      workflow = File.read!(Workflow.workflow_file_path())
++      File.write!(Workflow.workflow_file_path(), String.replace(workflow, "  thread_sandbox:", "  permission_profile: symphony-pilot\n  thread_sandbox:"))
++      issue = %Issue{id: "6", identifier: "GH-6", title: "raw", description: "raw", state: "open", url: "https://raw.invalid", labels: []}
++      assert {:error, {:active_permission_profile_mismatch, "symphony-pilot", _}} = AppServer.run(workspace, "safe", issue)
++    after
++      File.rm_rf(test_root)
++    end
++  end
++
+   test "app server rejects the workspace root and paths outside workspace root" do
+     test_root =
+       Path.join(
+diff --git a/elixir/test/symphony_elixir/github_adapter_test.exs b/elixir/test/symphony_elixir/github_adapter_test.exs
+index 2475853..d9f9b79 100644
+--- a/elixir/test/symphony_elixir/github_adapter_test.exs
++++ b/elixir/test/symphony_elixir/github_adapter_test.exs
+@@ -31,7 +31,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
+     :ok
+   end
+
+-  test "adapter validates GitHub config, delegates reads, and advertises github_api" do
++  test "pilot adapter delegates reads but exposes and executes no GitHub agent tool" do
+     settings = tracker_settings()
+
+     assert :ok = GitHubAdapter.validate_config(settings)
+@@ -64,9 +64,9 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
+     assert {:ok, ["42"]} = GitHubAdapter.fetch_issues_by_ids(["42"])
+     assert_receive {:github_ids_called, ["42"]}
+
+-    assert [%{"name" => "github_api"}] = GitHubAdapter.agent_tool_specs()
++    assert [] = GitHubAdapter.agent_tool_specs()
+
+-    assert GitHubAdapter.execute_agent_tool(
++    refute GitHubAdapter.execute_agent_tool(
+              "github_api",
+              %{"method" => "GET", "path" => "/user"},
+              github_client: fn _method, _path, _params, _body, _opts ->
