@@ -103,7 +103,7 @@ set -- "$@" \
   --setenv LANG C.UTF-8 \
   --chdir "$workspace"
 
-"$bwrap_bin" "$@" /pilot-runtime/codex app-server &
+"$bwrap_bin" "$@" /pilot-runtime/codex app-server <&0 &
 sandbox_pid=$!
 set +e
 wait "$sandbox_pid"
