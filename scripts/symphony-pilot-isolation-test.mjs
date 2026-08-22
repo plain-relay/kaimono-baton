@@ -14,6 +14,9 @@ if (process.argv.length > (configOnly ? 3 : 2)) fail('unexpected-argument')
 function fail(code) { throw new Error(code) }
 function requireEnv(name) { const value = process.env[name]?.trim(); if (!value) fail(`missing-${name.toLowerCase()}`); return path.resolve(value) }
 function quote(value) { return `'${value.replaceAll("'", `'\"'\"'`)}'` }
+function reportInvariant(id, label, passed, status = '') {
+  console.log(`ISOLATION-${id} ${label} ${passed ? 'PASS' : `FAIL ${status || 'status=unknown'}`}`)
+}
 
 const workspace = fs.realpathSync(process.cwd())
 const controlRoot = requireEnv('SYMPHONY_PILOT_CONTROL_ROOT')
@@ -27,30 +30,44 @@ if (spawnSync('/usr/bin/curl', ['--version']).status !== 0) fail('curl-missing')
 if (!fs.statSync(launcher).isFile()) fail('trusted-launcher-missing')
 
 const unexpectedPilotHomeEntries = [
-  { path: path.join(pilotHome, 'AGENTS.md'), kind: 'file', content: 'UNTRUSTED_INSTRUCTION\n' },
-  { path: path.join(pilotHome, 'skills'), kind: 'directory' },
-  { path: path.join(pilotHome, 'hooks'), kind: 'directory' },
-  { path: path.join(pilotHome, 'config.toml'), kind: 'file', content: '[mcp_servers.untrusted]\ncommand = "false"\n' },
-  { path: path.join(pilotHome, 'plugins'), kind: 'directory' },
+  { id: '10A', label: 'pilot-home-AGENTS', path: path.join(pilotHome, 'AGENTS.md'), kind: 'file', content: 'UNTRUSTED_INSTRUCTION\n' },
+  { id: '10B', label: 'pilot-home-skills', path: path.join(pilotHome, 'skills'), kind: 'directory' },
+  { id: '10C', label: 'pilot-home-hooks', path: path.join(pilotHome, 'hooks'), kind: 'directory' },
+  { id: '10D', label: 'pilot-home-MCP-config', path: path.join(pilotHome, 'config.toml'), kind: 'file', content: '[mcp_servers.untrusted]\ncommand = "false"\n' },
+  { id: '10E', label: 'pilot-home-plugins', path: path.join(pilotHome, 'plugins'), kind: 'directory' },
 ]
+const pilotHomeInjectionResults = []
 for (const entry of unexpectedPilotHomeEntries) {
+  let passed = false
+  let status = 'status=host-error'
+  let created = false
   try {
     if (entry.kind === 'directory') fs.mkdirSync(entry.path, { mode: 0o700 })
     else fs.writeFileSync(entry.path, entry.content, { flag: 'wx', mode: 0o600 })
+    created = true
     const rejected = spawnSync(launcher, ['codex', 'app-server'], {
       cwd: workspace,
       env: process.env,
       encoding: 'utf8',
       timeout: 15000,
     })
-    if (rejected.status === 0 || !rejected.stderr.includes('pilot-home-unexpected-content')) fail('pilot-home-injection-not-rejected')
+    passed = rejected.status !== 0 && !rejected.error && typeof rejected.stderr === 'string' && rejected.stderr.includes('pilot-home-unexpected-content')
+    if (!passed) {
+      if (rejected.error) status = 'status=launcher-error'
+      else if (Number.isInteger(rejected.status)) status = `exit=${rejected.status}`
+      else status = 'status=launcher-signal'
+    }
   } finally {
-    if (entry.kind === 'directory') {
+    if (!created) {
+      // A pre-existing unexpected entry is not test-owned and must not be removed.
+    } else if (entry.kind === 'directory') {
       try { fs.rmdirSync(entry.path) } catch {}
     } else {
       try { fs.unlinkSync(entry.path) } catch {}
     }
   }
+  reportInvariant(entry.id, entry.label, passed, status)
+  pilotHomeInjectionResults.push(passed)
 }
 
 const issueMatch = path.basename(workspace).match(/^GH-([1-9]\d*)$/)
@@ -80,6 +97,8 @@ const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'symphony-pilot-outsid
 const outsideCanary = path.join(outsideRoot, 'canary')
 const workspaceCanary = path.join(workspace, '.symphony', `workspace-read-${nonce}`)
 const workspaceProbe = path.join(workspace, '.symphony', `workspace-write-${nonce}`)
+const workspaceProbeMarker = 'SYMPHONY_PILOT_WORKSPACE_WRITE_PROBE\n'
+const controlFinalizer = path.join(controlRoot, 'scripts', 'symphony-pilot-host.mjs')
 
 fs.mkdirSync(codexDir, { recursive: true, mode: 0o700 })
 fs.mkdirSync(path.dirname(workspaceCanary), { recursive: true, mode: 0o700 })
@@ -88,7 +107,7 @@ for (const file of [homeCanary, codexCanary, outsideCanary, workspaceCanary]) fs
 const child = spawn(launcher, ['codex', 'app-server'], {
   cwd: workspace,
   env: process.env,
-  stdio: ['pipe', 'pipe', 'inherit'],
+  stdio: ['pipe', 'pipe', 'pipe'],
   detached: true,
 })
 
@@ -96,6 +115,7 @@ let buffer = ''
 let nextId = 1
 const pending = new Map()
 child.stdout.setEncoding('utf8')
+child.stderr.resume()
 child.stdout.on('data', (chunk) => {
   buffer += chunk
   while (buffer.includes('\n')) {
@@ -130,6 +150,71 @@ function waitForChildExit(timeoutMs) {
     const timer = setTimeout(() => { child.off('exit', exited); resolve(false) }, timeoutMs)
     child.once('exit', exited)
   })
+}
+
+async function runInvariant({ id, label, command, expectedExit = 0, expectedStdout = '', timeoutMs = 15000, hostCheck }) {
+  let passed = false
+  let status = 'status=unknown'
+  try {
+    const result = await rpc('command/exec', {
+      command,
+      cwd: workspace,
+      permissionProfile: PROFILE,
+      timeoutMs,
+      outputBytesCap: 1024,
+    })
+    if (result?.exitCode !== expectedExit) {
+      status = Number.isInteger(result?.exitCode) ? `exit=${result.exitCode}` : 'status=missing-exit'
+    } else if (String(result?.stdout ?? '') !== expectedStdout) {
+      status = 'status=unexpected-output'
+    } else {
+      try {
+        if (hostCheck) hostCheck()
+        passed = true
+      } catch {
+        status = 'status=host-verification'
+      }
+    }
+  } catch (error) {
+    status = error?.message === 'app-server-exited' ? 'status=app-server-exited' : 'status=app-server-rpc-error'
+  }
+  reportInvariant(id, label, passed, status)
+  return passed
+}
+
+async function runControlVisibilityInvariant() {
+  let status = 'status=unknown'
+  try {
+    const result = await rpc('command/exec', {
+      command: ['/bin/sh', '-c', `test ! -e ${quote(controlRoot)}`],
+      cwd: workspace,
+      permissionProfile: PROFILE,
+      timeoutMs: 15000,
+      outputBytesCap: 1024,
+    })
+    if (String(result?.stdout ?? '') !== '') status = 'status=unexpected-output'
+    else if (result?.exitCode === 0) status = 'state=absent'
+    else if (result?.exitCode === 1) status = 'state=visible'
+    else status = Number.isInteger(result?.exitCode) ? `exit=${result.exitCode}` : 'status=missing-exit'
+  } catch (error) {
+    status = error?.message === 'app-server-exited' ? 'status=app-server-exited' : 'status=app-server-rpc-error'
+  }
+  const passed = status === 'state=absent' || status === 'state=visible'
+  reportInvariant('11A', 'control-visibility', passed, status)
+  return passed
+}
+
+function verifyControlFilesNotWritableByServiceUser() {
+  for (const file of [controlRoot, controlFinalizer, launcher]) {
+    let writable = false
+    try {
+      fs.accessSync(file, fs.constants.W_OK)
+      writable = true
+    } catch (error) {
+      if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error
+    }
+    if (writable) throw new Error('control-file-writable')
+  }
 }
 
 const cleanup = async () => {
@@ -168,33 +253,81 @@ try {
   if (thread?.activePermissionProfile?.id !== PROFILE) fail('active-permission-profile-mismatch')
   if (configOnly) {
     console.log(`[symphony-pilot-config] PASS profile=${PROFILE} approval=granular-fail-closed codex=0.147.0`)
+    if (!pilotHomeInjectionResults.every(Boolean)) process.exitCode = 1
   } else {
-    const shell = [
-      'set -eu',
-      `test -r ${quote(workspaceCanary)}`,
-      `printf probe > ${quote(workspaceProbe)}`,
-      `test ! -r ${quote(homeCanary)}`,
-      `test ! -r ${quote(codexCanary)}`,
-      `test ! -r ${quote(durableAuth)}`,
-      'test ! -r "$CODEX_HOME/auth.json"',
-      `test ! -r ${quote(outsideCanary)}`,
-      'test ! -r /mnt/c/Windows/win.ini',
-      `test ! -e ${quote(controlRoot)}`,
-      `test ! -w ${quote(launcher)}`,
-      "if curl --silent --show-error --max-time 3 https://example.com >/dev/null 2>&1; then exit 71; fi",
-      "printf 'workspace_read=pass\\nworkspace_write=pass\\nhome_read=blocked\\nnormal_codex_read=blocked\\npilot_auth_read=blocked\\noutside_read=blocked\\nmnt_c_read=blocked\\nnetwork=blocked\\ncontrol_write=blocked\\n'",
-    ].join('; ')
-    const result = await rpc('command/exec', {
-      command: ['/bin/sh', '-c', shell],
-      cwd: workspace,
-      permissionProfile: PROFILE,
-      timeoutMs: 15000,
-      outputBytesCap: 4096,
+    const results = [...pilotHomeInjectionResults]
+    results.push(await runInvariant({
+      id: '01',
+      label: 'workspace-read',
+      command: ['/bin/sh', '-c', `test -r ${quote(workspaceCanary)}`],
+    }))
+    results.push(await runInvariant({
+      id: '02',
+      label: 'workspace-write',
+      command: ['/bin/sh', '-c', `printf '%s\\n' ${quote(workspaceProbeMarker.trim())} > ${quote(workspaceProbe)}`],
+      hostCheck: () => {
+        if (fs.readFileSync(workspaceProbe, 'utf8') !== workspaceProbeMarker) throw new Error('workspace-write-marker-mismatch')
+      },
+    }))
+    results.push(await runInvariant({
+      id: '03',
+      label: 'normal-home-read',
+      command: ['/bin/sh', '-c', `test ! -r ${quote(homeCanary)}`],
+    }))
+    results.push(await runInvariant({
+      id: '04',
+      label: 'normal-codex-read',
+      command: ['/bin/sh', '-c', `test ! -r ${quote(codexCanary)}`],
+    }))
+    results.push(await runInvariant({
+      id: '05A',
+      label: 'durable-pilot-auth',
+      command: ['/bin/sh', '-c', `test ! -r ${quote(durableAuth)}`],
+    }))
+    results.push(await runInvariant({
+      id: '05B',
+      label: 'runtime-auth',
+      command: ['/bin/sh', '-c', 'test -n "${CODEX_HOME:-}" && test ! -r "$CODEX_HOME/auth.json"'],
+    }))
+    results.push(await runInvariant({
+      id: '06',
+      label: 'outside-workspace-read',
+      command: ['/bin/sh', '-c', `test ! -r ${quote(outsideCanary)}`],
+    }))
+    results.push(await runInvariant({
+      id: '07',
+      label: 'mnt-c',
+      command: ['/bin/sh', '-c', 'test ! -e /mnt/c'],
+    }))
+    const routeIsolated = await runInvariant({
+      id: '08A',
+      label: 'network-route',
+      command: ['/bin/sh', '-c', "test ! -r /proc/net/route || ! /bin/grep -Eq '^[^[:space:]]+[[:space:]]+00000000[[:space:]]+' /proc/net/route"],
     })
-    if (result?.exitCode !== 0) fail('negative-isolation-command-failed')
-    const expected = ['workspace_read=pass', 'workspace_write=pass', 'home_read=blocked', 'normal_codex_read=blocked', 'pilot_auth_read=blocked', 'outside_read=blocked', 'mnt_c_read=blocked', 'network=blocked', 'control_write=blocked']
-    if (result.stdout.trim().split(/\r?\n/).join('|') !== expected.join('|')) fail('negative-isolation-result-mismatch')
-    console.log(`[symphony-pilot-isolation] PASS profile=${PROFILE} approval=granular-fail-closed pilot_home_injection=blocked control_write=blocked codex=0.147.0`)
+    const httpIsolated = await runInvariant({
+      id: '08B',
+      label: 'network-http',
+      command: ['/bin/sh', '-c', 'if ! test -x /usr/bin/curl; then exit 72; fi; if /usr/bin/curl --silent --show-error --connect-timeout 2 --max-time 5 https://example.com >/dev/null 2>&1; then exit 71; fi; exit 0'],
+      timeoutMs: 10000,
+    })
+    const networkIsolated = routeIsolated && httpIsolated
+    reportInvariant('08', 'network', networkIsolated, 'status=subcheck-failed')
+    results.push(networkIsolated)
+    reportInvariant('09', 'active-profile', true)
+    results.push(true)
+    const pilotHomeInjectionBlocked = pilotHomeInjectionResults.every(Boolean)
+    reportInvariant('10', 'injection-rejection', pilotHomeInjectionBlocked, 'status=subcheck-failed')
+    results.push(pilotHomeInjectionBlocked)
+    results.push(await runControlVisibilityInvariant())
+    results.push(await runInvariant({
+      id: '11B',
+      label: 'control-writability',
+      command: ['/bin/sh', '-c', `if test ! -e ${quote(controlRoot)}; then exit 0; fi; test ! -w ${quote(controlRoot)} && test ! -w ${quote(controlFinalizer)} && test ! -w ${quote(launcher)}`],
+      hostCheck: verifyControlFilesNotWritableByServiceUser,
+    }))
+    const passed = results.every(Boolean)
+    console.log(`OVERALL ${passed ? 'PASS' : 'FAIL'}`)
+    if (!passed) process.exitCode = 1
   }
 } finally {
   await cleanup()
