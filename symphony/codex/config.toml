@@ -48,6 +48,7 @@ description = "Kaimono Baton unattended pilot: minimal runtime read, workspace w
 
 [permissions.symphony-pilot.filesystem]
 ":minimal" = "read"
+"/pilot-runtime/codex" = "read"
 
 [permissions.symphony-pilot.filesystem.":workspace_roots"]
 "." = "write"

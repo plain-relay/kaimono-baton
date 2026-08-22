@@ -82,6 +82,7 @@ default_permissions = "symphony-pilot"
 
 [permissions.symphony-pilot.filesystem]
 ":minimal" = "read"
+"/pilot-runtime/codex" = "read"
 
 [permissions.symphony-pilot.filesystem.":workspace_roots"]
 "." = "write"
@@ -90,7 +91,7 @@ default_permissions = "symphony-pilot"
 enabled = false
 ```
 
-Unlisted filesystem paths are denied. The normal HOME, normal `~/.codex`, unrelated repositories, host operational files, `/mnt/c`, and GitHub credentials are not mounted into the outer bwrap namespace. Only the fresh ephemeral runtime home is mounted for app-server state and authentication; the durable auth store and state/permit roots are absent from the namespace. The runtime home is not in the agent-command permission set. The workspace is the only writable project root. Both the Codex profile and a bwrap network namespace deny agent network access.
+Unlisted filesystem paths are denied. The only non-minimal runtime exception is the read-only `/pilot-runtime/codex` executable that Codex 0.147.0 must re-enter inside its own Bubblewrap stage; it does not grant the `/pilot-runtime` directory, the runtime auth home, or any host data. The normal HOME, normal `~/.codex`, unrelated repositories, host operational files, `/mnt/c`, and GitHub credentials are not mounted into the outer bwrap namespace. Only the fresh ephemeral runtime home is mounted for app-server state and authentication; the durable auth store and state/permit roots are absent from the namespace. The runtime home is not in the agent-command permission set. The workspace is the only writable project root. Both the Codex profile and a bwrap network namespace deny agent network access.
 
 Unexpected approval, permission escalation, MCP elicitation, external-tool call, or user-input request terminates the unattended run. The pilot does not silently approve it.
 

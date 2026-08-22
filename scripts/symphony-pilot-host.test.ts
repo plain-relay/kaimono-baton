@@ -229,6 +229,13 @@ describe('trusted control, pilot home, and launch permit', () => {
     ].join('\n'))
     expect(workflow).not.toContain('    reject:')
   })
+  it('grants only the exact trusted Codex re-entry executable outside minimal and workspace access', () => {
+    const config = fs.readFileSync(path.resolve('symphony/codex/config.toml'), 'utf8')
+    const operations = fs.readFileSync(path.resolve('docs/operations/SYMPHONY_PILOT.md'), 'utf8')
+    for (const value of [config, operations]) expect(value).toContain('"/pilot-runtime/codex" = "read"')
+    expect(config).not.toContain('":root" = "read"')
+    expect(config).not.toContain('"/pilot-runtime" = "read"')
+  })
   it('rejects missing and mismatched one-use launch permits', () => {
     const stateRoot = temp('permit'); process.env.SYMPHONY_PILOT_STATE_DIR = stateRoot
     process.env.SYMPHONY_PILOT_INSTANCE_ID = '11111111-1111-4111-8111-111111111111'
@@ -359,14 +366,19 @@ describe('privileged Git boundary', () => {
     const first = privilegedGitEnv(); fs.writeFileSync(path.join(first.GIT_CONFIG_VALUE_0!, 'pre-push'), 'malicious')
     expect(() => privilegedGitEnv()).toThrow(PilotError)
   })
-  it('disables global/system config and both pre-push and reference-transaction hooks', () => {
-    const { root } = repo(); const marker = path.join(root, 'hook-ran'); const hooks = path.join(root, '.git', 'hooks')
-    for (const name of ['pre-push', 'reference-transaction']) { fs.writeFileSync(path.join(hooks, name), `#!/bin/sh\necho bad > ${JSON.stringify(marker)}\n`); try { fs.chmodSync(path.join(hooks, name), 0o755) } catch {} }
+  it('disables global/system config and agent-controlled pre-push and reference-transaction hooks', () => {
+    const { root } = repo(); const marker = path.join(root, 'agent-hook-ran'); const credentialMarker = path.join(root, 'agent-hook-saw-synthetic-credential'); const hooks = path.join(root, '.git', 'hooks')
+    for (const name of ['pre-push', 'reference-transaction']) {
+      fs.writeFileSync(path.join(hooks, name), `#!/bin/sh\nprintf hook > ${JSON.stringify(marker)}\nif test -n "$PILOT_TEST_CREDENTIAL_SENTINEL"; then printf credential > ${JSON.stringify(credentialMarker)}; fi\n`)
+      try { fs.chmodSync(path.join(hooks, name), 0o755) } catch {}
+    }
     git(root, ['config', 'core.hooksPath', '.git/hooks']); const fake = path.join(root, 'system.gitconfig'); fs.writeFileSync(fake, '[alias]\nupdate-ref = !echo bad\n[credential]\nhelper = !echo bad\n[core]\nhooksPath = .git/hooks\n')
     const env = privilegedGitEnv({ GIT_CONFIG_SYSTEM: fake }); expect(path.resolve(git(root, ['config', '--get', 'core.hooksPath'], env))).not.toBe(path.resolve(hooks))
     git(root, ['update-ref', 'refs/heads/safe', 'HEAD'], env); expect(fs.existsSync(marker)).toBe(false)
     const bare = temp('bare-remote'); git(bare, ['init', '--bare'])
-    const pushEnv = { ...env, GIT_CONFIG_VALUE_3: 'always' }
-    git(root, ['push', bare, 'HEAD:refs/heads/test'], pushEnv); expect(fs.existsSync(marker)).toBe(false)
+    const pushEnv = { ...env, GIT_CONFIG_VALUE_3: 'always', PILOT_TEST_CREDENTIAL_SENTINEL: 'synthetic-nonsecret' }
+    git(root, ['push', bare, 'HEAD:refs/heads/test'], pushEnv)
+    expect(fs.existsSync(marker)).toBe(false)
+    expect(fs.existsSync(credentialMarker)).toBe(false)
   })
 })

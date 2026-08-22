@@ -209,7 +209,7 @@ async function runControlVisibilityInvariant() {
     })
     if (String(result?.stdout ?? '') !== '') status = 'status=unexpected-output'
     else if (result?.exitCode === 0) status = 'state=absent'
-    else if (result?.exitCode === 1) status = 'state=visible'
+    else if (result?.exitCode === 1 && commandFailureStatus(result) === 'exit=1') status = 'state=visible'
     else status = commandFailureStatus(result)
   } catch (error) {
     status = error?.message === 'app-server-exited' ? 'status=app-server-exited' : 'status=app-server-rpc-error'
