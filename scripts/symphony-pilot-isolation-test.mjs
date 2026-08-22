@@ -152,6 +152,16 @@ function waitForChildExit(timeoutMs) {
   })
 }
 
+function commandFailureStatus(result) {
+  // Never emit command stderr: command paths can contain host-only canary names.
+  const stderr = typeof result?.stderr === 'string' ? result.stderr : ''
+  if (/bwrap/i.test(stderr) && /(?:namespace|unshare)/i.test(stderr)) return 'status=nested-bwrap-namespace'
+  if (/bwrap/i.test(stderr)) return 'status=bwrap-launch-failed'
+  if (/(?:seccomp|landlock|sandbox)/i.test(stderr)) return 'status=codex-sandbox-denied'
+  if (/(?:operation not permitted|permission denied|read-only file system)/i.test(stderr)) return 'status=filesystem-denied'
+  return Number.isInteger(result?.exitCode) ? `exit=${result.exitCode}` : 'status=missing-exit'
+}
+
 async function runInvariant({ id, label, command, expectedExit = 0, expectedStdout = '', timeoutMs = 15000, hostCheck }) {
   let passed = false
   let status = 'status=unknown'
@@ -164,7 +174,7 @@ async function runInvariant({ id, label, command, expectedExit = 0, expectedStdo
       outputBytesCap: 1024,
     })
     if (result?.exitCode !== expectedExit) {
-      status = Number.isInteger(result?.exitCode) ? `exit=${result.exitCode}` : 'status=missing-exit'
+      status = commandFailureStatus(result)
     } else if (String(result?.stdout ?? '') !== expectedStdout) {
       status = 'status=unexpected-output'
     } else {
@@ -195,7 +205,7 @@ async function runControlVisibilityInvariant() {
     if (String(result?.stdout ?? '') !== '') status = 'status=unexpected-output'
     else if (result?.exitCode === 0) status = 'state=absent'
     else if (result?.exitCode === 1) status = 'state=visible'
-    else status = Number.isInteger(result?.exitCode) ? `exit=${result.exitCode}` : 'status=missing-exit'
+    else status = commandFailureStatus(result)
   } catch (error) {
     status = error?.message === 'app-server-exited' ? 'status=app-server-exited' : 'status=app-server-rpc-error'
   }
