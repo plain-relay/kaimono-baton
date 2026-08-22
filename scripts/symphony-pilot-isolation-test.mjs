@@ -277,6 +277,21 @@ async function runAuthenticatedModelTurn(thread) {
   if (usedTool || messages.length !== 1 || messages[0]?.trim() !== 'PILOT_MODEL_OK') throw new Error('model-turn-output-invalid')
 }
 
+function safeModelItemSummary(items) {
+  const allowedTypes = new Map([
+    ['commandExecution', 'command'],
+    ['agentMessage', 'agent-message'],
+    ['reasoning', 'reasoning'],
+  ])
+  const allowedStatuses = new Set(['completed', 'inProgress', 'failed'])
+  return items.slice(0, 8).map((item) => {
+    const type = allowedTypes.get(item?.type) ?? 'other'
+    const status = allowedStatuses.has(item?.status) ? item.status.toLowerCase() : 'other'
+    const exit = item?.exitCode === 0 ? 'exit-zero' : Number.isInteger(item?.exitCode) ? 'exit-nonzero' : 'exit-missing'
+    return `${type}-${status}-${exit}`
+  }).join('-and-') || 'no-items'
+}
+
 async function runModelEditTurn(thread) {
   if (fs.existsSync(modelFixture)) throw new Error('model-fixture-already-exists')
   fs.writeFileSync(modelFixture, 'BEFORE\n', { flag: 'wx', mode: 0o600 })
@@ -293,7 +308,7 @@ async function runModelEditTurn(thread) {
   if (completed.params?.turn?.status !== 'completed' || !Array.isArray(items)) throw new Error('model-edit-not-completed')
   const commandSucceeded = items.some((item) => item?.type === 'commandExecution' && item?.status === 'completed' && (item?.exitCode === 0 || item?.exitCode === undefined))
   const messages = items.filter((item) => item?.type === 'agentMessage').map((item) => item.text)
-  if (!commandSucceeded) throw new Error('model-command-execution-not-successful')
+  if (!commandSucceeded) throw new Error(`model-command-execution-not-successful-${safeModelItemSummary(items)}`)
   if (fs.readFileSync(modelFixture, 'utf8') !== 'AFTER\n') throw new Error('model-fixture-content-invalid')
   if (messages.at(-1)?.trim() !== 'PILOT_EDIT_OK') throw new Error('model-edit-output-invalid')
 }
