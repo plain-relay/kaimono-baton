@@ -126,8 +126,8 @@ export SYMPHONY_PILOT_SYMPHONY_ROOT=/opt/plain-relay/openai-symphony-8001b52e
 export SYMPHONY_PILOT_CODEX_HOME=/var/lib/kaimono-baton-symphony/codex-auth
 export SYMPHONY_PILOT_CODEX_BIN=/usr/local/libexec/codex-0.147.0
 export SYMPHONY_PILOT_CODE_MODE_HOST_BIN=/opt/plain-relay/codex-runtime/codex-code-mode-host-0.147.0
-export SYMPHONY_PILOT_GIT_BIN=/usr/bin/git
-export SYMPHONY_PILOT_GIT_EXEC_PATH=/usr/lib/git-core
+export SYMPHONY_PILOT_GIT_BIN=/opt/git-2.50.1/bin/git
+export SYMPHONY_PILOT_GIT_EXEC_PATH=/opt/git-2.50.1/libexec/git-core
 export SYMPHONY_PILOT_NODE_BIN=/usr/bin/node
 export SYMPHONY_PILOT_NPM_BIN=/usr/bin/npm
 export SYMPHONY_PILOT_BWRAP_BIN=/usr/bin/bwrap
@@ -236,7 +236,7 @@ The agent-controlled index is never used to create the commit. The trusted final
 7. updates only the deterministic local branch ref;
 8. pushes the exact persisted SHA to `refs/heads/codex/gh-<issue>`.
 
-All privileged Git commands invoke validated absolute binaries with a fixed root-owned `GIT_EXEC_PATH` and minimal trusted `PATH`. They use sanitized HOME/XDG, `GIT_CONFIG_NOSYSTEM=1`, no global config, an empty trusted `core.hooksPath` outside the workspace, no credential helper, and a literal validated HTTPS destination. The host rejects unexpected local Git configuration, including helpers, URL rewrites, filters, SSH commands, and hook paths, before it constructs the Authorization value. Repository/system/global pre-push and reference-transaction hooks, aliases, remote helpers, and workspace executables cannot change privileged semantics. `--no-verify` is not used.
+All privileged Git commands invoke the pinned official Git 2.50.1 binary at the configured absolute path. Before either Host Guard launch or credentialed Finalizer Git, the host requires the exact version, requires the binary's unmodified `git --exec-path` to equal the configured canonical `/opt/git-2.50.1/libexec/git-core`, and requires root-owned, non-group/other-writable in-tree `git-remote-http` and `git-remote-https` helpers. A missing, redirected, writable, or PATH-substituted helper fails closed as `trusted-git-runtime-invalid` before Codex runs or credentials are introduced. The host then uses that fixed root-owned `GIT_EXEC_PATH` and minimal trusted `PATH`, with sanitized HOME/XDG, `GIT_CONFIG_NOSYSTEM=1`, no global config, an empty trusted `core.hooksPath` outside the workspace, no credential helper, and a literal validated HTTPS destination. It rejects unexpected local Git configuration, including helpers, URL rewrites, filters, SSH commands, and hook paths, before it constructs the Authorization value. Repository/system/global pre-push and reference-transaction hooks, aliases, remote helpers, and workspace executables cannot change privileged semantics. `--no-verify` is not used.
 
 No npm, test, build, package script, agent executable, or repository hook runs after the finalizer introduces credentials. After push, the host performs only GitHub API handoff, persists `completed`, and removes `codex-ready` best-effort. The PR is always Draft and targets `main`.
 

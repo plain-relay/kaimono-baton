@@ -558,6 +558,7 @@ const TRUSTED_BINARY_ENV = Object.freeze({
 })
 
 const CODE_MODE_HOST_SHA256 = '00ecf5d040865b97884c488883abd342581c2a432debe7a54e4646bceee3d2d6'
+const TRUSTED_GIT_VERSION = 'git version 2.50.1'
 
 function trustedBinary(kind) {
   const variable = TRUSTED_BINARY_ENV[kind]
@@ -567,6 +568,48 @@ function trustedBinary(kind) {
   assertPosixTrusted(resolved, { rootOwned: process.platform === 'linux' })
   if (process.platform !== 'win32') assert((fs.statSync(resolved).mode & 0o111) !== 0, 'trusted-binary-not-executable')
   return resolved
+}
+
+function trustedGitInspection(command, args) {
+  try {
+    return execFileSync(command, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: {
+        PATH: path.dirname(command),
+        HOME: process.platform === 'win32' ? process.env.SystemRoot || 'C:\\Windows' : '/',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      },
+    }).trim()
+  } catch { throw new PilotError('trusted-git-runtime-invalid') }
+}
+
+export function validateTrustedGitRuntime({ git, gitExecPath, inspect = trustedGitInspection, requireRootOwner = process.platform === 'linux' }) {
+  try {
+    const gitBinary = fs.realpathSync(git)
+    const configuredExecPath = fs.realpathSync(gitExecPath)
+    const gitRoot = fs.realpathSync(path.join(path.dirname(gitBinary), '..'))
+    const expectedExecPath = fs.realpathSync(path.join(gitRoot, 'libexec', 'git-core'))
+    assert(path.dirname(gitBinary) === path.join(gitRoot, 'bin'), 'trusted-git-runtime-invalid')
+    assert(configuredExecPath === expectedExecPath, 'trusted-git-runtime-invalid')
+    assert(inspect(gitBinary, ['--version']) === TRUSTED_GIT_VERSION, 'trusted-git-runtime-invalid')
+    assert(fs.realpathSync(inspect(gitBinary, ['--exec-path'])) === configuredExecPath, 'trusted-git-runtime-invalid')
+    assertPosixTrusted(gitRoot, { rootOwned: requireRootOwner, directory: true })
+    assertPosixTrusted(configuredExecPath, { rootOwned: requireRootOwner, directory: true })
+    for (const name of ['git-remote-http', 'git-remote-https']) {
+      const candidate = path.join(configuredExecPath, name)
+      const entry = fs.lstatSync(candidate)
+      assert(entry.isFile() || entry.isSymbolicLink(), 'trusted-git-runtime-invalid')
+      const target = fs.realpathSync(candidate)
+      assert(target !== gitRoot && safeInside(gitRoot, target), 'trusted-git-runtime-invalid')
+      assertPosixTrusted(target, { rootOwned: requireRootOwner })
+      if (process.platform !== 'win32') assert((fs.statSync(target).mode & 0o111) !== 0, 'trusted-git-runtime-invalid')
+    }
+  } catch (error) {
+    if (error instanceof PilotError && error.code === 'trusted-git-runtime-invalid') throw error
+    throw new PilotError('trusted-git-runtime-invalid')
+  }
 }
 
 export function trustedRuntimePaths() {
@@ -786,6 +829,7 @@ function verifyRuntimePins(cwd) {
   const codeModeHost = fs.realpathSync(configuredCodeModeHost)
   const authHome = fs.realpathSync(configuredAuthHome)
   const runtime = trustedRuntimePaths()
+  validateTrustedGitRuntime({ git: runtime.git, gitExecPath: runtime.gitExecPath })
   assertPosixTrusted(workspaceRoot, { directory: true })
   assertPosixTrusted(durableState, { directory: true })
   assertPosixTrusted(root, { directory: true })

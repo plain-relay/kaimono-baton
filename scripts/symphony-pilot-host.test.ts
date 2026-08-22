@@ -13,7 +13,7 @@ import {
   isPathAllowed, isProtectedPath, parseLsTreeRecord, permanentBlocker, persistPermanentPrepareFailure, privilegedGit, privilegedGitEnv, readSafeJson,
   runIfExecutionOwner, taskHash, validateAgentGitState, validateHandoff, validateIssueSnapshot, validateLaunchPermit,
   validatePilotAuthStore, validateRecoveryObject, validateReferencePathAtBase, validateRepoPath, validateSafeTask,
-  validateTrustedPathSeparation, verifyControlManifest,
+  validateTrustedGitRuntime, validateTrustedPathSeparation, verifyControlManifest,
 } from './symphony-pilot-host.mjs'
 
 const dirs: string[] = []
@@ -380,6 +380,56 @@ describe('atomic execution and exact tree', () => {
 })
 
 describe('privileged Git boundary', () => {
+  function trustedGitRuntimeFixture() {
+    const root = path.join(temp('trusted-git-runtime'), 'git-2.50.1')
+    const bin = path.join(root, 'bin'); const exec = path.join(root, 'libexec', 'git-core')
+    fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(exec, { recursive: true })
+    const gitBinary = path.join(bin, process.platform === 'win32' ? 'git.exe' : 'git')
+    fs.writeFileSync(gitBinary, 'trusted git\n'); fs.chmodSync(gitBinary, 0o755)
+    for (const name of ['git-remote-http', 'git-remote-https']) {
+      const helper = path.join(exec, name); fs.writeFileSync(helper, 'trusted helper\n'); fs.chmodSync(helper, 0o755)
+    }
+    const inspect = (_command: string, args: string[]) => args[0] === '--version' ? 'git version 2.50.1' : exec
+    return { root, gitBinary, exec, inspect }
+  }
+  it('fails closed unless the configured Git runtime has the exact in-tree HTTP(S) helpers', () => {
+    const fixture = trustedGitRuntimeFixture()
+    const verify = (overrides: Record<string, unknown> = {}) => validateTrustedGitRuntime({
+      git: fixture.gitBinary, gitExecPath: fixture.exec, inspect: fixture.inspect, requireRootOwner: false, ...overrides,
+    })
+    expect(() => verify()).not.toThrow()
+    fs.rmSync(path.join(fixture.exec, 'git-remote-https'))
+    expect(() => verify()).toThrow(PilotError)
+  })
+  it('rejects an outside-root helper, a writable helper, and an observed exec-path mismatch', () => {
+    const outside = trustedGitRuntimeFixture(); const outsideHelper = path.join(temp('outside-helper'), 'git-remote-https')
+    fs.writeFileSync(outsideHelper, 'outside\n'); fs.chmodSync(outsideHelper, 0o755)
+    fs.unlinkSync(path.join(outside.exec, 'git-remote-https'))
+    try { fs.symlinkSync(outsideHelper, path.join(outside.exec, 'git-remote-https')) } catch (error: any) { if (!['EPERM', 'EACCES'].includes(error?.code)) throw error }
+    expect(() => validateTrustedGitRuntime({ git: outside.gitBinary, gitExecPath: outside.exec, inspect: outside.inspect, requireRootOwner: false })).toThrow(PilotError)
+
+    const writable = trustedGitRuntimeFixture(); fs.chmodSync(path.join(writable.exec, 'git-remote-https'), 0o777)
+    if (process.platform === 'linux') expect(() => validateTrustedGitRuntime({ git: writable.gitBinary, gitExecPath: writable.exec, inspect: writable.inspect, requireRootOwner: false })).toThrow(PilotError)
+
+    const mismatch = trustedGitRuntimeFixture()
+    expect(() => validateTrustedGitRuntime({
+      git: mismatch.gitBinary, gitExecPath: mismatch.exec,
+      inspect: (_command: string, args: string[]) => args[0] === '--version' ? 'git version 2.50.1' : path.join(mismatch.root, 'wrong-exec'),
+      requireRootOwner: false,
+    })).toThrow(PilotError)
+  })
+  it('does not accept a PATH helper or inherited GIT_EXEC_PATH in place of the configured trusted runtime', () => {
+    const fixture = trustedGitRuntimeFixture(); const attack = temp('git-path-helper')
+    fs.writeFileSync(path.join(attack, 'git-remote-https'), 'fake helper\n')
+    const original = process.env.GIT_EXEC_PATH
+    try {
+      process.env.GIT_EXEC_PATH = attack
+      expect(() => validateTrustedGitRuntime({ git: fixture.gitBinary, gitExecPath: fixture.exec, inspect: fixture.inspect, requireRootOwner: false })).not.toThrow()
+    } finally {
+      if (original === undefined) delete process.env.GIT_EXEC_PATH
+      else process.env.GIT_EXEC_PATH = original
+    }
+  })
   it('uses an absolute Git and fixed helper path instead of a workspace-controlled PATH', () => {
     const { root } = repo(); const attack = path.join(root, 'attack-bin'); fs.mkdirSync(attack)
     const marker = path.join(root, 'fake-git-ran')
