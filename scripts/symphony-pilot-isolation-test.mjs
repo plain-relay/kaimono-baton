@@ -204,6 +204,23 @@ async function waitForNotification(method, predicate, timeoutMs = 120000) {
   throw new Error('app-server-notification-timeout')
 }
 
+function completedItemsForTurn(turnId) {
+  return notifications
+    .filter((message) => message.method === 'item/completed' && message.params?.turnId === turnId)
+    .map((message) => message.params?.item)
+    .filter(Boolean)
+}
+
+async function localEnvironmentStatus() {
+  try {
+    const response = await rpc('environment/status', { environmentId: 'local' })
+    const status = response?.status
+    return new Set(['ready', 'pending', 'disconnected', 'unknown']).has(status) ? status : 'unknown'
+  } catch {
+    return 'rpc-failed'
+  }
+}
+
 function waitForChildExit(timeoutMs) {
   if (child.exitCode !== null) return Promise.resolve(true)
   return new Promise((resolve) => {
@@ -278,7 +295,7 @@ async function runAuthenticatedModelTurn(thread) {
     const code = String(completed.params?.turn?.error?.code ?? 'no-code').replace(/[^a-z-]/gi, '')
     throw new Error(`model-turn-not-completed-${status}-${code}`)
   }
-  const usedTool = items.some((item) => /(?:command|tool|mcp|web|function|exec)/i.test(String(item?.type ?? '')))
+  const usedTool = [...items, ...completedItemsForTurn(turn.turn.id)].some((item) => /(?:command|tool|mcp|web|function|exec)/i.test(String(item?.type ?? '')))
   const messages = items.filter((item) => item?.type === 'agentMessage').map((item) => item.text)
   if (usedTool || messages.length !== 1 || messages[0]?.trim() !== 'PILOT_MODEL_OK') throw new Error('model-turn-output-invalid')
 }
@@ -313,9 +330,10 @@ async function runModelEditTurn(thread) {
   const completed = await waitForNotification('turn/completed', (params) => params?.turn?.id === turn?.turn?.id)
   const items = completed.params?.turn?.items
   if (completed.params?.turn?.status !== 'completed' || !Array.isArray(items)) throw new Error('model-edit-not-completed')
-  const commandSucceeded = items.some((item) => item?.type === 'commandExecution' && item?.status === 'completed' && (item?.exitCode === 0 || item?.exitCode === undefined))
+  const observedItems = [...items, ...completedItemsForTurn(turn.turn.id)]
+  const commandSucceeded = observedItems.some((item) => item?.type === 'commandExecution' && item?.status === 'completed' && (item?.exitCode === 0 || item?.exitCode === undefined))
   const messages = items.filter((item) => item?.type === 'agentMessage').map((item) => item.text)
-  if (!commandSucceeded) throw new Error(`model-command-execution-not-successful-${safeModelItemSummary(items)}`)
+  if (!commandSucceeded) throw new Error(`model-command-execution-not-successful-${safeModelItemSummary(observedItems)}`)
   if (fs.readFileSync(modelFixture, 'utf8') !== 'AFTER\n') throw new Error('model-fixture-content-invalid')
   if (messages.at(-1)?.trim() !== 'PILOT_EDIT_OK') throw new Error('model-edit-output-invalid')
 }
@@ -370,6 +388,7 @@ try {
   })
   if (thread?.activePermissionProfile?.id !== PROFILE) fail('active-permission-profile-mismatch')
   const exactThreadRuntimeWorkspaceRoots = hasExactRuntimeWorkspaceRoots(thread?.runtimeWorkspaceRoots)
+  const observedLocalEnvironmentStatus = await localEnvironmentStatus()
   if (configOnly) {
     console.log(`[symphony-pilot-config] PASS profile=${PROFILE} approval=granular-fail-closed codex=0.147.0`)
     if (!pilotHomeInjectionResults.every(Boolean)) process.exitCode = 1
@@ -433,6 +452,8 @@ try {
     if (modelEdit) {
       if (!authenticatedModelTurn) {
         reportInvariant('13', 'exact-local-environment', false, 'status=model-transport-prerequisite')
+      } else if (observedLocalEnvironmentStatus !== 'ready') {
+        reportInvariant('13', 'exact-local-environment', false, `status=local-environment-${observedLocalEnvironmentStatus}`)
       } else {
         localEnvironmentUsable = await runInvariant({
           id: '13',
