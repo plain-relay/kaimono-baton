@@ -15,7 +15,7 @@ Unattended live use is prohibited until the executable negative isolation test p
 - Host: WSL2/Linux with `bubblewrap` (`bwrap`)
 - Codex permission profile: `symphony-pilot`
 
-The host refuses a different Symphony HEAD, an unexpected patch path set, a mutable or overlapping control plane, an untrusted executable path, an unexpected pilot auth-home entry, a Code Mode host whose fixed release SHA-256 does not match, or a Codex version other than `codex-cli 0.147.0`. No latest-version substitution is permitted.
+The host refuses a different Symphony HEAD, any Symphony tree other than the exact pinned base plus approved patch, staged/untracked/ignored Symphony material, a non-root-owned or writable Symphony source/`.git` member, a mutable or overlapping control plane, an untrusted executable path, an unexpected pilot auth-home entry, a Code Mode host whose fixed release SHA-256 does not match, or a Codex version other than `codex-cli 0.147.0`. No latest-version substitution is permitted.
 
 The pinned Symphony patch is `symphony/patches/0001-disable-github-agent-tool.patch`. It:
 
@@ -107,13 +107,25 @@ policy through app-server `config/read` before starting a thread.
 
 ## Required local setup
 
-The runtime control plane is an installed artifact, not the Issue workspace or a normal checkout. From an independently reviewed exact source head, an operator explicitly installs a versioned control root; unattended runtime never invokes `sudo` or self-installs:
+The runtime control plane and Symphony source are installed artifacts, not the Issue workspace or editable service-account checkouts. Use two disposable checkouts: an exact patched checkout for the required tests/build evidence, and a second fresh, complete, clean checkout at the pinned Symphony SHA as the installer input. Do not use a partial/promisor clone. From an independently reviewed exact pilot head, an operator explicitly installs the versioned control root and immutable Symphony source; unattended runtime never downloads, updates, invokes `sudo`, or self-installs:
 
 ```sh
-sudo ./scripts/install-symphony-pilot-control.sh "$PWD" '<reviewed-version-or-sha>'
+sudo ./scripts/install-symphony-pilot-control.sh "$PWD" '<reviewed-version-or-sha>' /path/to/fresh-clean-openai-symphony
 ```
 
-The installer refuses a non-root invocation and an existing destination. It copies only the enumerated runtime artifacts to `/opt/plain-relay/kaimono-baton-symphony-control/<version-or-sha>/`, creates a SHA-256 manifest there, and installs a byte-identical launcher at `/opt/plain-relay/kaimono-baton-symphony-launcher`. The control root, manifest, launcher, and trusted executable ancestors must be canonical, root-owned, and not group/other writable. The outer namespace does not mount `/opt`, so neither the active control root nor stable launcher is agent-visible. The host verifies the exact manifest path set and every digest before use. It rejects control/workspace/state overlap in either direction and symlink resolution into an agent-writable tree.
+The installer refuses a non-root invocation, a non-clean or wrong-HEAD Symphony input, and existing destinations. It copies only the enumerated pilot artifacts to `/opt/plain-relay/kaimono-baton-symphony-control/<version-or-sha>/`, creates a SHA-256 manifest there, and installs a byte-identical launcher at `/opt/plain-relay/kaimono-baton-symphony-launcher`. It then copies the clean pinned Symphony input to `/opt/plain-relay/openai-symphony-8001b52e`, applies only the manifest-attested pilot patch, makes the complete source and `.git` root-owned and non-group/non-other-writable, and runs the exact runtime verifier before reporting success.
+
+The root-owned control evidence includes `symphony/runtime-identity.json`:
+
+- `symphonyBaseSha`: `8001b52e3062495a16e520e4ceaf8f9de868c4d0`
+- `approvedPatchSha256`: `e43cd3df8339b31ed9964132f4be5aa02e637c419cb91851e37d28a5d6907df4`
+- `expectedPostPatchTreeSha`: `7ecf6b930bc4e4f78e107be570dfef60d0b6991b`
+
+At every Host Guard entry, before claim, permit, Codex, or credentials, two independent disposable Git indexes/object directories are used. One derives the expected tree from the exact pinned base and attested patch without touching the live index. The other hashes every live tracked regular file with `--no-filters` and reconstructs the actual tree. Exact tree equality is mandatory. A staged change, untracked file, ignored file or directory, missing/altered tracked file, unexpected executable mode, alternate object store, symlink, non-root-owned member, or group/other-writable source/`.git` member fails as `symphony-runtime-integrity-invalid` without printing contents.
+
+The service account must be non-root and cannot own or write the installed Symphony source. Workspace, state, and auth roots retain their existing service-account ownership; do not make them root-owned. If attended Symphony build/setup creates `elixir/bin`, `elixir/_build`, `elixir/deps`, `elixir/cover`, logs, or another ignored source-tree artifact, complete the tests in the disposable checkout and do not copy that artifact into the production source. If the selected runtime invocation cannot place legitimate mutable cache/build/log state outside the immutable source, stop and identify the exact required path; never make the source writable again.
+
+The control root, identity, manifest, launcher, immutable Symphony source, `.git`, and trusted executable ancestors must be canonical, root-owned, and not group/other writable. The outer namespace does not mount `/opt`, so neither the active control root, Symphony source, nor stable launcher is agent-visible. The host verifies the exact manifest path set and every digest before use. It rejects control/workspace/state overlap in either direction and symlink resolution into an agent-writable tree.
 
 Use private directories on the WSL/Linux filesystem, not `/mnt/c`. The workspace, state, and auth roots must be owned by the Symphony service account and not group/other writable. The auth root contains only `auth.json`:
 
@@ -130,7 +142,7 @@ export SYMPHONY_PILOT_GIT_BIN=/opt/git-2.50.1/bin/git
 export SYMPHONY_PILOT_GIT_EXEC_PATH=/opt/git-2.50.1/libexec/git-core
 export SYMPHONY_PILOT_NODE_BIN=/usr/bin/node
 export SYMPHONY_PILOT_NPM_BIN=/usr/bin/npm
-export SYMPHONY_PILOT_BWRAP_BIN=/usr/bin/bwrap
+export SYMPHONY_PILOT_BWRAP_BIN=/opt/bubblewrap-0.11.2/bin/bwrap
 export SYMPHONY_PILOT_SHELL_BIN=/bin/sh
 export SYMPHONY_PILOT_INSTANCE_ID='<a fresh random UUID unique to this Symphony process>'
 export GITHUB_TOKEN='<fine-grained host token supplied outside the repository>'
@@ -275,11 +287,10 @@ Codex 0.147.0 `:minimal` intentionally includes system runtime paths such as `/u
 
 ## Start, stop, and rollback
 
-After the upstream patch/tests and negative isolation gate pass:
+After the upstream patch/tests, immutable runtime installation/verification, and negative isolation gate pass, start only the attended, previously built trusted Symphony executable. Do not build into or create `bin`, `_build`, `deps`, logs, or other ignored content under `SYMPHONY_PILOT_SYMPHONY_ROOT` after installation:
 
 ```sh
-cd "$SYMPHONY_PILOT_SYMPHONY_ROOT/elixir"
-./bin/symphony "$SYMPHONY_PILOT_CONTROL_ROOT/symphony/WORKFLOW.md"
+<trusted-root-owned-symphony-executable> "$SYMPHONY_PILOT_CONTROL_ROOT/symphony/WORKFLOW.md"
 ```
 
 Stopping the single expected Symphony process is the kill switch. Do not enable unattended execution until independent review accepts the exact implementation head.

@@ -13,10 +13,11 @@ import {
   isPathAllowed, isProtectedPath, parseLsTreeRecord, permanentBlocker, persistPermanentPrepareFailure, privilegedGit, privilegedGitEnv, readSafeJson,
   runIfExecutionOwner, taskHash, validateAgentGitState, validateHandoff, validateIssueSnapshot, validateLaunchPermit,
   validatePilotAuthStore, validateRecoveryObject, validateReferencePathAtBase, validateRepoPath, validateSafeTask,
-  validateTrustedGitRuntime, validateTrustedPathSeparation, verifyControlManifest,
+  validateTrustedGitRuntime, validateTrustedPathSeparation, verifyControlManifest, verifySymphonyRuntime,
 } from './symphony-pilot-host.mjs'
 
 const dirs: string[] = []
+const SYMPHONY_RUNTIME_ERROR = 'symphony-runtime-integrity-invalid'
 const originalState = process.env.SYMPHONY_PILOT_STATE_DIR
 const originalInstance = process.env.SYMPHONY_PILOT_INSTANCE_ID
 const trustedVariables = ['SYMPHONY_PILOT_GIT_BIN', 'SYMPHONY_PILOT_NODE_BIN', 'SYMPHONY_PILOT_NPM_BIN', 'SYMPHONY_PILOT_BWRAP_BIN', 'SYMPHONY_PILOT_SHELL_BIN', 'SYMPHONY_PILOT_GIT_EXEC_PATH'] as const
@@ -79,6 +80,55 @@ function repo() {
   return { root, baseSha: git(root, ['rev-parse', 'HEAD']) }
 }
 
+const symphonyPatchedPaths = [
+  'elixir/lib/symphony_elixir/codex/app_server.ex',
+  'elixir/lib/symphony_elixir/config.ex',
+  'elixir/lib/symphony_elixir/config/schema.ex',
+  'elixir/lib/symphony_elixir/github/adapter.ex',
+  'elixir/lib/symphony_elixir/workspace.ex',
+  'elixir/test/symphony_elixir/app_server_test.exs',
+  'elixir/test/symphony_elixir/github_adapter_test.exs',
+].sort()
+
+function symphonyFixture() {
+  const root = temp('symphony-runtime')
+  const control = temp('symphony-control')
+  process.env.SYMPHONY_PILOT_STATE_DIR = temp('symphony-state')
+  git(root, ['init'])
+  for (const relativePath of [...symphonyPatchedPaths, 'README.md', '.gitignore']) {
+    const target = path.join(root, relativePath)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, relativePath === '.gitignore' ? 'ignored-runtime/\n' : [`${relativePath} header`, 'old marker', ...Array.from({ length: 20 }, (_, index) => `unchanged ${index}`), ''].join('\n'))
+  }
+  git(root, ['add', '--all'])
+  git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'base'])
+  const baseSha = git(root, ['rev-parse', 'HEAD'])
+  for (const relativePath of symphonyPatchedPaths) {
+    const target = path.join(root, relativePath)
+    fs.writeFileSync(target, fs.readFileSync(target, 'utf8').replace('old marker', 'approved pilot change'))
+  }
+  const patch = git(root, ['diff', '--binary', '--full-index'])
+  const patchFile = path.join(control, 'symphony', 'patches', '0001-disable-github-agent-tool.patch')
+  fs.mkdirSync(path.dirname(patchFile), { recursive: true })
+  fs.writeFileSync(patchFile, `${patch}\n`)
+  const index = path.join(temp('symphony-expected-index'), 'index')
+  const indexEnv = { ...process.env, GIT_INDEX_FILE: index }
+  git(root, ['read-tree', baseSha], indexEnv)
+  git(root, ['apply', '--cached', patchFile], indexEnv)
+  const expectedTreeSha = git(root, ['write-tree'], indexEnv)
+  git(root, ['reset', '--hard', baseSha])
+  git(root, ['apply', patchFile])
+  const identity = {
+    schemaVersion: 1,
+    symphonyBaseSha: baseSha,
+    approvedPatchSha256: crypto.createHash('sha256').update(fs.readFileSync(patchFile)).digest('hex'),
+    expectedPostPatchTreeSha: expectedTreeSha,
+  }
+  const identityFile = path.join(control, 'symphony', 'runtime-identity.json')
+  fs.writeFileSync(identityFile, `${JSON.stringify(identity, null, 2)}\n`)
+  return { root, control, patchFile, identityFile, identity, controlManifest: { controlRoot: control, entries: [] } }
+}
+
 describe('safe task and approval', () => {
   it('requires the exact v2 schema and a full base SHA', () => {
     expect(validateSafeTask(validTask())).toEqual(validTask())
@@ -116,9 +166,25 @@ describe('paths and approved-base references', () => {
     for (const p of ['../src', '/src', 'C:/src', 'src\\pages', 'src/ページ']) expect(() => validateRepoPath(p)).toThrow(PilotError)
     expect(isPathAllowed('src/pages2/x.ts', ['src/pages'])).toBe(false)
     expect(isPathAllowed('src/pages/x.ts', ['src/pages'])).toBe(true)
-    for (const p of ['SECURITY.md', 'AGENTS.md', '.github/x', '.codex/x', '.agents/x', 'symphony/WORKFLOW.md', '.npmrc', '.gitmodules', '.gitattributes', 'package.json', 'package-lock.json', 'vite.config.ts']) {
+    for (const p of ['SECURITY.md', 'AGENTS.md', '.github/x', '.codex/x', '.agents/x', 'symphony/WORKFLOW.md', '.npmrc', '.gitmodules', '.gitattributes', 'package.json', 'package-lock.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json', 'worker/tsconfig.json']) {
       expect(isProtectedPath(p)).toBe(true)
       expect(() => validateSafeTask(validTask({ scopePaths: [p] }))).toThrow(PilotError)
+      expect(() => validateSafeTask(validTask({ referencePaths: [p] }))).toThrow(PilotError)
+      expect(isPathAllowed(p, [p.includes('/') ? p.split('/')[0] : '.'])).toBe(false)
+    }
+  })
+  it('rejects protected TypeScript validation files during trusted finalization', () => {
+    const { root } = repo()
+    fs.mkdirSync(path.join(root, 'worker'))
+    const configs = ['tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json', 'worker/tsconfig.json']
+    for (const config of configs) fs.writeFileSync(path.join(root, config), '{}\n')
+    git(root, ['add', '--', ...configs])
+    git(root, ['commit', '-m', 'worker-config'])
+    const baseSha = git(root, ['rev-parse', 'HEAD'])
+    for (const config of configs) {
+      fs.writeFileSync(path.join(root, config), '{"compilerOptions":{}}\n')
+      expect(() => buildValidatedTree(root, baseSha, [config], [config.includes('/') ? 'worker' : config], 'modify-existing')).toThrow(PilotError)
+      git(root, ['checkout', '--', config])
     }
   })
   it('protects the complete pilot control and security-evidence family', () => {
@@ -268,6 +334,72 @@ describe('trusted control, pilot home, and launch permit', () => {
       { ownerProcessIdentity: 'd'.repeat(64) },
     ]) expect(() => validateLaunchPermit({ ...valid, ...mutation }, state, state.ownerInstanceId, ownerProcessIdentity)).toThrow(PilotError)
   })
+})
+
+describe('exact immutable Symphony runtime', () => {
+  it('accepts the exact approved post-patch tree', () => {
+    const fixture = symphonyFixture()
+    const result = verifySymphonyRuntime(fixture.root, fixture.controlManifest, { requireRootOwner: false, expectedBaseSha: fixture.identity.symphonyBaseSha })
+    expect(result).toMatchObject({
+      symphonyBaseSha: fixture.identity.symphonyBaseSha,
+      approvedPatchSha256: fixture.identity.approvedPatchSha256,
+      expectedPostPatchTreeSha: fixture.identity.expectedPostPatchTreeSha,
+      actualPostPatchTreeSha: fixture.identity.expectedPostPatchTreeSha,
+    })
+  }, 20_000)
+  it('reproduces the old extra-hunk bypass and rejects it with the exact tree validator', () => {
+    const fixture = symphonyFixture()
+    fs.appendFileSync(path.join(fixture.root, 'elixir/lib/symphony_elixir/codex/app_server.ex'), 'def unreviewed_runtime_code, do: :accepted\n')
+    expect(git(fixture.root, ['rev-parse', 'HEAD'])).toBe(fixture.identity.symphonyBaseSha)
+    expect(git(fixture.root, ['diff', '--name-only']).split(/\r?\n/).sort()).toEqual(symphonyPatchedPaths)
+    expect(() => git(fixture.root, ['apply', '--reverse', '--check', fixture.patchFile])).not.toThrow()
+    expect(() => verifySymphonyRuntime(fixture.root, fixture.controlManifest, { requireRootOwner: false, expectedBaseSha: fixture.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+  }, 20_000)
+  it('rejects another tracked-file modification, untracked and ignored files, and a staged change', () => {
+    const tracked = symphonyFixture()
+    fs.appendFileSync(path.join(tracked.root, 'README.md'), 'unexpected\n')
+    expect(() => verifySymphonyRuntime(tracked.root, tracked.controlManifest, { requireRootOwner: false, expectedBaseSha: tracked.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+
+    const untracked = symphonyFixture()
+    fs.writeFileSync(path.join(untracked.root, 'runtime-injection.exs'), 'unexpected\n')
+    expect(() => verifySymphonyRuntime(untracked.root, untracked.controlManifest, { requireRootOwner: false, expectedBaseSha: untracked.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+
+    const ignored = symphonyFixture()
+    fs.mkdirSync(path.join(ignored.root, 'ignored-runtime'))
+    fs.writeFileSync(path.join(ignored.root, 'ignored-runtime', 'instruction.exs'), 'unexpected\n')
+    expect(() => verifySymphonyRuntime(ignored.root, ignored.controlManifest, { requireRootOwner: false, expectedBaseSha: ignored.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+
+    const staged = symphonyFixture()
+    fs.appendFileSync(path.join(staged.root, 'README.md'), 'staged\n')
+    git(staged.root, ['add', '--', 'README.md'])
+    expect(() => verifySymphonyRuntime(staged.root, staged.controlManifest, { requireRootOwner: false, expectedBaseSha: staged.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+  }, 20_000)
+  it('rejects the wrong patch digest, expected tree, and base HEAD', () => {
+    const digest = symphonyFixture()
+    fs.appendFileSync(digest.patchFile, '# changed approved patch\n')
+    expect(() => verifySymphonyRuntime(digest.root, digest.controlManifest, { requireRootOwner: false, expectedBaseSha: digest.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+
+    const tree = symphonyFixture()
+    fs.writeFileSync(tree.identityFile, `${JSON.stringify({ ...tree.identity, expectedPostPatchTreeSha: 'a'.repeat(40) })}\n`)
+    expect(() => verifySymphonyRuntime(tree.root, tree.controlManifest, { requireRootOwner: false, expectedBaseSha: tree.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+
+    const head = symphonyFixture()
+    git(head.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'wrong-head'])
+    expect(() => verifySymphonyRuntime(head.root, head.controlManifest, { requireRootOwner: false, expectedBaseSha: head.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+  }, 20_000)
+  it.runIf(process.platform === 'linux')('rejects writable runtime and .git members', () => {
+    const runtime = symphonyFixture()
+    fs.chmodSync(path.join(runtime.root, 'elixir/lib/symphony_elixir/codex/app_server.ex'), 0o666)
+    expect(() => verifySymphonyRuntime(runtime.root, runtime.controlManifest, { requireRootOwner: false, expectedBaseSha: runtime.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+
+    const metadata = symphonyFixture()
+    fs.chmodSync(path.join(metadata.root, '.git', 'config'), 0o666)
+    expect(() => verifySymphonyRuntime(metadata.root, metadata.controlManifest, { requireRootOwner: false, expectedBaseSha: metadata.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+  }, 20_000)
+  it.runIf(process.platform === 'linux' && process.getuid?.() !== 0)('rejects a service-UID-owned Symphony source and .git tree', () => {
+    const fixture = symphonyFixture()
+    expect(() => verifySymphonyRuntime(fixture.root, fixture.controlManifest, { expectedBaseSha: fixture.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+  }, 20_000)
 })
 
 describe('atomic execution and exact tree', () => {

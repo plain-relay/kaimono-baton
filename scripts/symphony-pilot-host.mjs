@@ -66,11 +66,13 @@ export const CONTROL_MANIFEST_FILES = Object.freeze([
   'symphony/WORKFLOW.md',
   'symphony/codex/config.toml',
   'symphony/patches/0001-disable-github-agent-tool.patch',
+  'symphony/runtime-identity.json',
 ].sort())
 
 const PROTECTED_EXACT = new Set([
   '.gitignore', '.npmrc', '.gitmodules', '.gitattributes', 'SECURITY.md', 'AGENTS.md',
   'package.json', 'package-lock.json', 'vite.config.ts',
+  'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json', 'worker/tsconfig.json',
   'docs/CODEX_WORKFLOW.md',
   'docs/operations/AI_AGENT_POLICY.md',
   'docs/operations/AI_MERGE_APPROVAL.md',
@@ -303,6 +305,139 @@ export function verifyControlManifest(controlRoot, { requireRootOwner = process.
     assert(fileHash(target) === entry.sha256, 'control-file-digest-mismatch')
   }
   return { controlRoot: control, manifest, entries }
+}
+
+const SYMPHONY_RUNTIME_IDENTITY_KEYS = new Set([
+  'schemaVersion', 'symphonyBaseSha', 'approvedPatchSha256', 'expectedPostPatchTreeSha',
+])
+const SYMPHONY_RUNTIME_ERROR = 'symphony-runtime-integrity-invalid'
+
+function symphonyRuntimeFailure(action) {
+  try { return action() }
+  catch { throw new PilotError(SYMPHONY_RUNTIME_ERROR) }
+}
+
+function validateSymphonyRuntimeIdentity(value, patchFile, expectedBaseSha) {
+  assert(value && typeof value === 'object' && !Array.isArray(value), SYMPHONY_RUNTIME_ERROR)
+  exactKeys(value, SYMPHONY_RUNTIME_IDENTITY_KEYS, SYMPHONY_RUNTIME_ERROR)
+  assert(value.schemaVersion === 1, SYMPHONY_RUNTIME_ERROR)
+  assert(value.symphonyBaseSha === expectedBaseSha, SYMPHONY_RUNTIME_ERROR)
+  assert(SHA64.test(value.approvedPatchSha256) && value.approvedPatchSha256 === fileHash(patchFile), SYMPHONY_RUNTIME_ERROR)
+  assert(SHA40.test(value.expectedPostPatchTreeSha), SYMPHONY_RUNTIME_ERROR)
+  return value
+}
+
+function assertImmutableSymphonyFilesystem(root, { requireRootOwner }) {
+  assertPosixTrusted(root, { rootOwned: requireRootOwner, directory: true })
+  const visit = (current) => {
+    for (const name of fs.readdirSync(current)) {
+      const target = path.join(current, name)
+      const stat = fs.lstatSync(target)
+      assert(!stat.isSymbolicLink(), SYMPHONY_RUNTIME_ERROR)
+      if (process.platform === 'linux') {
+        assert(!requireRootOwner || stat.uid === 0, SYMPHONY_RUNTIME_ERROR)
+        assert((stat.mode & 0o022) === 0, SYMPHONY_RUNTIME_ERROR)
+      }
+      if (stat.isDirectory()) visit(target)
+      else assert(stat.isFile(), SYMPHONY_RUNTIME_ERROR)
+    }
+  }
+  visit(root)
+  const gitDir = path.join(root, '.git')
+  assert(fs.lstatSync(gitDir).isDirectory(), SYMPHONY_RUNTIME_ERROR)
+  assert(!fs.existsSync(path.join(gitDir, 'objects', 'info', 'alternates')), SYMPHONY_RUNTIME_ERROR)
+}
+
+function withSymphonyGitScratch(root, baseEnv, action) {
+  const parent = path.join(stateRoot(), 'symphony-runtime-tmp')
+  fs.mkdirSync(parent, { recursive: true, mode: 0o700 })
+  assertPosixTrusted(parent, { directory: true })
+  const scratch = fs.mkdtempSync(path.join(parent, 'verify-'))
+  fs.chmodSync(scratch, 0o700)
+  const objects = path.join(scratch, 'objects')
+  fs.mkdirSync(objects, { mode: 0o700 })
+  const gitDir = fs.realpathSync(privilegedGit(root, ['rev-parse', '--absolute-git-dir'], baseEnv))
+  const sourceObjects = fs.realpathSync(path.join(gitDir, 'objects'))
+  const env = {
+    ...baseEnv,
+    GIT_INDEX_FILE: path.join(scratch, 'index'),
+    GIT_OBJECT_DIRECTORY: objects,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: sourceObjects,
+  }
+  try { return action(env) }
+  finally { fs.rmSync(scratch, { recursive: true, force: true }) }
+}
+
+function deriveExpectedSymphonyTree(root, baseSha, patchFile, baseEnv) {
+  return withSymphonyGitScratch(root, baseEnv, (env) => {
+    privilegedGit(root, ['read-tree', baseSha], env)
+    privilegedGit(root, ['apply', '--cached', '--whitespace=nowarn', patchFile], env)
+    const treeSha = privilegedGit(root, ['write-tree'], env)
+    const entries = parseSymphonyTreeEntries(privilegedGit(root, ['ls-tree', '-r', '-z', '--full-tree', treeSha], env))
+    return { treeSha, entries }
+  })
+}
+
+function parseSymphonyTreeEntries(output) {
+  return splitNull(output).map((record) => {
+    const match = record.match(/^(100644|100755) blob ([0-9a-f]{40})\t([A-Za-z0-9_./@+-]+)$/)
+    assert(match && !match[3].startsWith('/') && !match[3].split('/').includes('..'), SYMPHONY_RUNTIME_ERROR)
+    return { expectedMode: match[1], expectedSha: match[2], relativePath: match[3] }
+  })
+}
+
+function computeActualSymphonyTree(root, entries, baseEnv) {
+  assert(entries.length > 0, SYMPHONY_RUNTIME_ERROR)
+  return withSymphonyGitScratch(root, baseEnv, (env) => {
+    privilegedGit(root, ['read-tree', '--empty'], env)
+    const paths = entries.map((entry) => entry.relativePath)
+    for (const relativePath of paths) {
+      const target = path.resolve(root, relativePath)
+      assert(safeInside(root, target), SYMPHONY_RUNTIME_ERROR)
+      const stat = fs.lstatSync(target)
+      assert(stat.isFile() && !stat.isSymbolicLink(), SYMPHONY_RUNTIME_ERROR)
+    }
+    const hashes = privilegedGitInput(root, ['hash-object', '--no-filters', '-w', '--stdin-paths'], `${paths.join('\n')}\n`, env).split(/\r?\n/).filter(Boolean)
+    assert(hashes.length === entries.length && hashes.every((hash) => SHA40.test(hash)), SYMPHONY_RUNTIME_ERROR)
+    const indexInfo = entries.map((entry, index) => {
+      const stat = fs.statSync(path.join(root, entry.relativePath))
+      const actualMode = process.platform === 'linux' ? ((stat.mode & 0o111) !== 0 ? '100755' : '100644') : entry.expectedMode
+      return `${actualMode} ${hashes[index]}\t${entry.relativePath}`
+    }).join('\n')
+    privilegedGitInput(root, ['update-index', '--index-info'], `${indexInfo}\n`, env)
+    return privilegedGit(root, ['write-tree'], env)
+  })
+}
+
+export function verifySymphonyRuntime(rootPath, controlManifest, { requireRootOwner = process.platform === 'linux', expectedBaseSha = PILOT.symphonySha } = {}) {
+  return symphonyRuntimeFailure(() => {
+    const root = fs.realpathSync(rootPath)
+    const control = controlManifest.controlRoot
+    const patchFile = path.join(control, 'symphony', 'patches', '0001-disable-github-agent-tool.patch')
+    const identityFile = path.join(control, 'symphony', 'runtime-identity.json')
+    const identity = validateSymphonyRuntimeIdentity(JSON.parse(fs.readFileSync(identityFile, 'utf8')), patchFile, expectedBaseSha)
+    assertImmutableSymphonyFilesystem(root, { requireRootOwner })
+    const gitEnv = {
+      GIT_CONFIG_COUNT: '5',
+      GIT_CONFIG_KEY_4: 'safe.directory',
+      GIT_CONFIG_VALUE_4: root,
+    }
+    assertSafeLocalGitConfig(root, gitEnv)
+    assert(privilegedGit(root, ['rev-parse', '--verify', 'HEAD'], gitEnv) === identity.symphonyBaseSha, SYMPHONY_RUNTIME_ERROR)
+    assert(privilegedGit(root, ['diff', '--cached', '--name-only', '--no-renames', '-z', identity.symphonyBaseSha], gitEnv) === '', SYMPHONY_RUNTIME_ERROR)
+    assert(privilegedGit(root, ['ls-files', '--others', '--exclude-standard', '-z'], gitEnv) === '', SYMPHONY_RUNTIME_ERROR)
+    assert(privilegedGit(root, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], gitEnv) === '', SYMPHONY_RUNTIME_ERROR)
+    const expected = deriveExpectedSymphonyTree(root, identity.symphonyBaseSha, patchFile, gitEnv)
+    assert(expected.treeSha === identity.expectedPostPatchTreeSha, SYMPHONY_RUNTIME_ERROR)
+    const actualTreeSha = computeActualSymphonyTree(root, expected.entries, gitEnv)
+    assert(actualTreeSha === expected.treeSha, SYMPHONY_RUNTIME_ERROR)
+    return {
+      symphonyBaseSha: identity.symphonyBaseSha,
+      approvedPatchSha256: identity.approvedPatchSha256,
+      expectedPostPatchTreeSha: expected.treeSha,
+      actualPostPatchTreeSha: actualTreeSha,
+    }
+  })
 }
 
 export function validatePilotAuthStore(authRoot) {
@@ -659,12 +794,13 @@ export function privilegedGitEnv(extra = {}) {
   })
 }
 
-function run(cwd, command, args, { env = childEnv(), stdio = ['ignore', 'pipe', 'pipe'] } = {}) {
-  try { return execFileSync(command, args, { cwd, env, stdio, encoding: 'utf8' }).trim() }
+function run(cwd, command, args, { env = childEnv(), stdio = ['ignore', 'pipe', 'pipe'], input } = {}) {
+  try { return execFileSync(command, args, { cwd, env, stdio: input === undefined ? stdio : ['pipe', 'pipe', 'pipe'], input, encoding: 'utf8' }).trim() }
   catch { throw new PilotError(`${path.basename(command)}-command-failed`) }
 }
 function git(cwd, args, options = {}) { return run(cwd, trustedRuntimePaths().git, args, options) }
 export function privilegedGit(cwd, args, extraEnv = {}) { return git(cwd, args, { env: privilegedGitEnv(extraEnv) }) }
+function privilegedGitInput(cwd, args, input, extraEnv = {}) { return git(cwd, args, { env: privilegedGitEnv(extraEnv), input }) }
 
 function fileHash(file) { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') }
 function refsHash(cwd) { return crypto.createHash('sha256').update(privilegedGit(cwd, ['for-each-ref', '--format=%(refname) %(objectname)'])).digest('hex') }
@@ -701,8 +837,8 @@ function assertOrigin(cwd) {
   assert(pushUrls.length === 1 && pushUrls[0] === PILOT.repositoryUrl, 'unexpected-origin-url')
 }
 
-export function assertSafeLocalGitConfig(cwd) {
-  const keys = splitNull(privilegedGit(cwd, ['config', '--local', '--name-only', '--null', '--list'])).map((key) => key.toLowerCase())
+export function assertSafeLocalGitConfig(cwd, extraEnv = {}) {
+  const keys = splitNull(privilegedGit(cwd, ['config', '--local', '--name-only', '--null', '--list'], extraEnv)).map((key) => key.toLowerCase())
   const allowed = keys.every((key) =>
     ['core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates', 'core.ignorecase', 'core.symlinks', 'remote.origin.url', 'remote.origin.fetch'].includes(key)
     || /^branch\.[a-z0-9_./-]+\.(remote|merge)$/.test(key)
@@ -832,7 +968,7 @@ function verifyRuntimePins(cwd) {
   validateTrustedGitRuntime({ git: runtime.git, gitExecPath: runtime.gitExecPath })
   assertPosixTrusted(workspaceRoot, { directory: true })
   assertPosixTrusted(durableState, { directory: true })
-  assertPosixTrusted(root, { directory: true })
+  assert(process.getuid() !== 0, 'pilot-service-root-forbidden')
   assertPosixTrusted(authHome, { directory: true })
   validatePilotAuthStore(authHome)
   assertPosixTrusted(launcher, { rootOwned: true })
@@ -850,18 +986,7 @@ function verifyRuntimePins(cwd) {
   assert(fs.realpathSync(path.join(control, 'scripts', 'symphony-pilot-host.mjs')) === fs.realpathSync(process.argv[1]), 'untrusted-host-entrypoint')
   assert(fs.realpathSync(path.join(control, 'scripts', 'symphony-pilot-codex.sh')) === path.join(control, 'scripts', 'symphony-pilot-codex.sh'), 'untrusted-wrapper-path')
   assert(fs.realpathSync(path.join(control, 'symphony', 'codex', 'config.toml')) === path.join(control, 'symphony', 'codex', 'config.toml'), 'untrusted-config-path')
-  assert(privilegedGit(root, ['rev-parse', 'HEAD']) === PILOT.symphonySha, 'symphony-version-mismatch')
-  const changed = privilegedGit(root, ['diff', '--name-only']).split(/\r?\n/).filter(Boolean).sort()
-  assert(JSON.stringify(changed) === JSON.stringify([
-    'elixir/lib/symphony_elixir/codex/app_server.ex',
-    'elixir/lib/symphony_elixir/config.ex',
-    'elixir/lib/symphony_elixir/config/schema.ex',
-    'elixir/lib/symphony_elixir/github/adapter.ex',
-    'elixir/lib/symphony_elixir/workspace.ex',
-    'elixir/test/symphony_elixir/app_server_test.exs',
-    'elixir/test/symphony_elixir/github_adapter_test.exs',
-  ]), 'symphony-patch-mismatch')
-  privilegedGit(root, ['apply', '--reverse', '--check', path.join(control, 'symphony', 'patches', '0001-disable-github-agent-tool.patch')])
+  verifySymphonyRuntime(root, controlManifest)
   assertOrigin(cwd)
 }
 
@@ -1215,6 +1340,16 @@ async function main() {
     else if (mode === 'validate-pilot-auth-store') {
       verifyRuntimePins(process.cwd())
       validatePilotAuthStore(process.env.SYMPHONY_PILOT_CODEX_HOME?.trim() || '')
+    }
+    else if (mode === 'verify-symphony-runtime-only') {
+      const configuredRoot = process.env.SYMPHONY_PILOT_SYMPHONY_ROOT?.trim()
+      const configuredControl = process.env.SYMPHONY_PILOT_CONTROL_ROOT?.trim()
+      assert(process.platform === 'linux' && configuredRoot && configuredControl, 'pilot-runtime-path-missing')
+      const controlManifest = verifyControlManifest(configuredControl)
+      const runtime = trustedRuntimePaths()
+      validateTrustedGitRuntime({ git: runtime.git, gitExecPath: runtime.gitExecPath })
+      const identity = verifySymphonyRuntime(configuredRoot, controlManifest)
+      console.log(`[symphony-pilot] symphony-runtime-integrity=PASS base=${identity.symphonyBaseSha} patch=${identity.approvedPatchSha256} expected=${identity.expectedPostPatchTreeSha} actual=${identity.actualPostPatchTreeSha}`)
     }
     else if (mode === 'operator-block') operatorBlock(Number(issueArg), Number(executionArg))
     else throw new PilotError('usage')
