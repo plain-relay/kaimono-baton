@@ -27,11 +27,13 @@ function findGit() {
 }
 beforeAll(() => {
   const gitBinary = findGit()
+  const trustedSystemBinary = process.platform === 'linux' ? fs.realpathSync('/bin/sh') : process.execPath
+  const trustedNode = process.platform === 'linux' && fs.existsSync('/usr/bin/node') ? fs.realpathSync('/usr/bin/node') : trustedSystemBinary
   process.env.SYMPHONY_PILOT_GIT_BIN = gitBinary
-  process.env.SYMPHONY_PILOT_NODE_BIN = process.execPath
-  process.env.SYMPHONY_PILOT_NPM_BIN = process.execPath
-  process.env.SYMPHONY_PILOT_BWRAP_BIN = process.execPath
-  process.env.SYMPHONY_PILOT_SHELL_BIN = process.execPath
+  process.env.SYMPHONY_PILOT_NODE_BIN = trustedNode
+  process.env.SYMPHONY_PILOT_NPM_BIN = trustedSystemBinary
+  process.env.SYMPHONY_PILOT_BWRAP_BIN = trustedSystemBinary
+  process.env.SYMPHONY_PILOT_SHELL_BIN = trustedSystemBinary
   process.env.SYMPHONY_PILOT_GIT_EXEC_PATH = execFileSync(gitBinary, ['--exec-path'], { encoding: 'utf8' }).trim()
 })
 afterAll(() => {
@@ -198,13 +200,13 @@ describe('trusted control, pilot home, and launch permit', () => {
   })
   it('requires the durable pilot home to contain only one regular auth.json', () => {
     for (const injected of ['AGENTS.md', 'skills', 'hooks', 'config.toml', 'plugins', 'mcp.json']) {
-      const home = temp('pilot-home'); fs.writeFileSync(path.join(home, 'auth.json'), '{}')
+      const home = temp('pilot-home'); fs.writeFileSync(path.join(home, 'auth.json'), '{}', { mode: 0o600 })
       const target = path.join(home, injected)
       if (injected === 'skills' || injected === 'hooks' || injected === 'plugins') fs.mkdirSync(target)
       else fs.writeFileSync(target, 'bad')
       expect(() => validatePilotAuthStore(home)).toThrow(PilotError)
     }
-    const clean = temp('pilot-home-clean'); fs.writeFileSync(path.join(clean, 'auth.json'), '{}')
+    const clean = temp('pilot-home-clean'); fs.writeFileSync(path.join(clean, 'auth.json'), '{}', { mode: 0o600 })
     expect(validatePilotAuthStore(clean)).toBe(path.join(clean, 'auth.json'))
   })
   it('explicitly disables Codex 0.147.0 skills, hooks, plugins, apps, and orchestrator sources', () => {
