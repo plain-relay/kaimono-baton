@@ -28,6 +28,8 @@ case "$pilot_auth_home/" in "$workspace/"*) fail pilot-home-inside-workspace ;; 
 [ -x "$bwrap_bin" ] && [ -f "$bwrap_bin" ] && [ ! -L "$bwrap_bin" ] || fail bwrap-binary-invalid
 [ -f "$template" ] && [ ! -L "$template" ] || fail pilot-config-missing
 [ "$(/usr/bin/env -i HOME=/nonexistent PATH=/usr/bin:/bin "$codex_bin" --version)" = 'codex-cli 0.147.0' ] || fail codex-version-mismatch
+[ "$(/usr/bin/env -i PATH=/usr/bin:/bin "$bwrap_bin" --version)" = 'bubblewrap 0.11.2' ] || fail bwrap-version-mismatch
+/usr/bin/env -i PATH=/usr/bin:/bin "$bwrap_bin" --help 2>&1 | /usr/bin/grep -F -- '--perms' >/dev/null || fail bwrap-perms-unsupported
 
 # The durable pilot home is an auth-only store. The trusted host rejects every
 # other entry, including AGENTS.md, skills, hooks, plugins, MCP, and config files.
@@ -60,16 +62,13 @@ trap 'stop_sandbox; exit 143' TERM
 /usr/bin/install -m 0600 "$template" "$runtime_home/config.toml"
 /usr/bin/install -m 0600 "$pilot_auth_home/auth.json" "$runtime_home/auth.json"
 
-# A one-use, host-only permit binds this launch to the claimed issue,
-# executionId, task hash, base SHA, owner UUID, and a 60-second lifetime.
-"$node_bin" "$host" consume-launch-permit
-
 set -- \
   --die-with-parent --new-session \
   --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-net \
   --proc /proc --dev /dev --tmpfs /tmp \
   --dir /pilot-runtime \
-  --ro-bind "$codex_bin" /pilot-runtime/codex
+  --ro-bind "$codex_bin" /pilot-runtime/codex \
+  --ro-bind "$bwrap_bin" /pilot-runtime/bwrap
 
 for runtime_path in /usr /bin /lib /lib64; do
   [ -e "$runtime_path" ] && set -- "$@" --ro-bind "$runtime_path" "$runtime_path"
@@ -102,6 +101,21 @@ set -- "$@" \
   --setenv PATH /pilot-runtime:/usr/bin:/bin \
   --setenv LANG C.UTF-8 \
   --chdir "$workspace"
+
+# Codex 0.147.0 starts its own Bubblewrap sandbox. Prove that its PATH resolves
+# to the same attested binary mounted above before consuming the one-use permit.
+if ! "$bwrap_bin" "$@" /bin/sh -c '
+  set -eu
+  [ "$(command -v bwrap)" = /pilot-runtime/bwrap ]
+  [ "$(bwrap --version)" = "bubblewrap 0.11.2" ]
+  bwrap --help 2>&1 | /bin/grep -F -- "--perms" >/dev/null
+' >/dev/null 2>&1; then
+  fail inner-bwrap-discovery-failed
+fi
+
+# A one-use, host-only permit binds this launch to the claimed issue,
+# executionId, task hash, base SHA, owner UUID, and a 60-second lifetime.
+"$node_bin" "$host" consume-launch-permit
 
 exec 3<&0
 "$bwrap_bin" "$@" /pilot-runtime/codex app-server <&3 3<&- &
