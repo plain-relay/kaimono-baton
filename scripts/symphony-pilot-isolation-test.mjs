@@ -338,6 +338,25 @@ async function runModelEditTurn(thread) {
   if (messages.at(-1)?.trim() !== 'PILOT_EDIT_OK') throw new Error('model-edit-output-invalid')
 }
 
+async function runModelToolProbe(thread) {
+  const turn = await rpc('turn/start', {
+    threadId: thread.thread.id,
+    cwd: workspace,
+    permissions: PROFILE,
+    environments: localEnvironment,
+    runtimeWorkspaceRoots,
+    input: [{ type: 'text', text: 'Use the available command execution tool now to run exactly `/bin/true`. Do not merely describe the command. After it succeeds, respond exactly:\n\nPILOT_TOOL_OK' }],
+  })
+  const completed = await waitForNotification('turn/completed', (params) => params?.turn?.id === turn?.turn?.id)
+  const items = completed.params?.turn?.items
+  if (completed.params?.turn?.status !== 'completed' || !Array.isArray(items)) throw new Error('model-tool-probe-not-completed')
+  const observedItems = [...items, ...completedItemsForTurn(turn.turn.id)]
+  const commandSucceeded = observedItems.some((item) => item?.type === 'commandExecution' && item?.status === 'completed' && (item?.exitCode === 0 || item?.exitCode === undefined))
+  const messages = items.filter((item) => item?.type === 'agentMessage').map((item) => item.text)
+  if (!commandSucceeded) throw new Error(`model-tool-probe-command-not-successful-${safeModelItemSummary(observedItems)}`)
+  if (messages.at(-1)?.trim() !== 'PILOT_TOOL_OK') throw new Error('model-tool-probe-output-invalid')
+}
+
 function verifyControlFilesNotWritableByServiceUser() {
   for (const file of [controlRoot, controlFinalizer, launcher]) {
     let writable = false
@@ -460,10 +479,13 @@ try {
           command: ['/bin/true'],
         })
         if (localEnvironmentUsable) {
-          try { await runModelEditTurn(thread) }
+          try {
+            await runModelToolProbe(thread)
+            await runModelEditTurn(thread)
+          }
           catch (error) {
             modelEditSucceeded = false
-            modelEditStatus = /^(?:app-server-exited|app-server-rpc-error|app-server-notification-timeout|model-(?:edit|command|fixture)-[a-z-]+)$/.test(error?.message || '') ? `status=${error.message}` : 'status=model-edit-failed'
+            modelEditStatus = /^(?:app-server-exited|app-server-rpc-error|app-server-notification-timeout|model-(?:edit|command|fixture|tool-probe)-[a-z-]+)$/.test(error?.message || '') ? `status=${error.message}` : 'status=model-edit-failed'
           }
         }
       }
