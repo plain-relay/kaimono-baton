@@ -448,7 +448,7 @@ index 2475853..f4fdb1e 100644
               "github_api",
               %{"method" => "GET", "path" => "/user"},
               github_client: fn _method, _path, _params, _body, _opts ->
-@@ -392,7 +392,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
+@@ -392,6 +392,6 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
               token_env
             ]
 
