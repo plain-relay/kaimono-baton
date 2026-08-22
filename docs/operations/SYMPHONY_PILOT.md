@@ -59,7 +59,7 @@ human-approved public Issue safe-task v2
   -> codex-ready cleanup
 ```
 
-One Symphony process is the expected operating configuration. This is not the concurrency security boundary: Linux atomic `mkdir` issue/execution claims outside the workspace and durable per-execution state enforce cross-process exclusion. Every process has a different unpredictable `SYMPHONY_PILOT_INSTANCE_ID`; only the persisted owner can finalize. A losing process's `after_run` is a deterministic no-op that does not inspect the handoff or mutate the owner's state. Locks are never broken because of age.
+One Symphony process is the expected operating configuration. This is not the concurrency security boundary: Linux atomic `mkdir` issue/execution claims outside the workspace and durable per-execution state enforce cross-process exclusion. Every process has an unpredictable `SYMPHONY_PILOT_INSTANCE_ID`, plus a launcher-derived SHA-256 process identity over the instance ID, Linux boot ID, and a stable non-shell Symphony parent PID/start time. Both values are persisted and bound into the one-use permit; only their exact pair can finalize. A losing process's `after_run` is a deterministic no-op that does not inspect the handoff or mutate the owner's state. Locks are never broken because of age.
 
 ## AI input and capability boundary
 
@@ -83,6 +83,8 @@ default_permissions = "symphony-pilot"
 [permissions.symphony-pilot.filesystem]
 ":minimal" = "read"
 "/pilot-runtime/codex" = "read"
+"/usr/local" = "deny"
+"/usr/src" = "deny"
 
 [permissions.symphony-pilot.filesystem.":workspace_roots"]
 "." = "write"
@@ -91,7 +93,9 @@ default_permissions = "symphony-pilot"
 enabled = false
 ```
 
-Unlisted filesystem paths are denied. The only non-minimal runtime exception is the read-only `/pilot-runtime/codex` executable that Codex 0.147.0 must re-enter inside its own Bubblewrap stage; it does not grant the `/pilot-runtime` directory, the runtime auth home, or any host data. The normal HOME, normal `~/.codex`, unrelated repositories, host operational files, `/mnt/c`, and GitHub credentials are not mounted into the outer bwrap namespace. Only the fresh ephemeral runtime home is mounted for app-server state and authentication; the durable auth store and state/permit roots are absent from the namespace. The runtime home is not in the agent-command permission set. The workspace is the only writable project root. Both the Codex profile and a bwrap network namespace deny agent network access.
+Unlisted filesystem paths are denied. The only non-minimal runtime exception is the read-only `/pilot-runtime/codex` executable that Codex 0.147.0 must re-enter inside its own Bubblewrap stage; it does not grant the `/pilot-runtime` directory, the runtime auth home, or any host data. The normal HOME, normal `~/.codex`, unrelated repositories, host operational files, `/mnt/c`, and GitHub credentials are not mounted into the outer bwrap namespace. Only the fresh ephemeral runtime home is mounted for app-server state and authentication; the durable auth store and state/permit roots are absent from the namespace. The runtime home is not in the agent-command permission set. The workspace is the only writable project root.
+
+The pinned Codex app-server is trusted control-plane code and uses the host network only for its authenticated model-provider transport. The outer namespace therefore does not unshare networking. That does not grant networking to model-controlled execution: the exact `symphony-pilot` profile creates Codex's inner Bubblewrap command sandbox with network disabled. MCP, apps, plugins, connectors, web search, remote environments, capability roots, and dynamic tools remain disabled and fail closed.
 
 Unexpected approval, permission escalation, MCP elicitation, external-tool call, or user-input request terminates the unattended run. The pilot does not silently approve it.
 
@@ -109,13 +113,13 @@ The runtime control plane is an installed artifact, not the Issue workspace or a
 sudo ./scripts/install-symphony-pilot-control.sh "$PWD" '<reviewed-version-or-sha>'
 ```
 
-The installer refuses a non-root invocation and an existing destination. It copies only the enumerated runtime artifacts to `/opt/plain-relay/kaimono-baton-symphony-control/<version-or-sha>/`, creates a SHA-256 manifest there, and installs a byte-identical launcher at `/usr/local/libexec/kaimono-baton-symphony-launcher`. The control root, manifest, launcher, and trusted executable ancestors must be canonical, root-owned, and not group/other writable. The host verifies the exact manifest path set and every digest before use. It rejects control/workspace/state overlap in either direction and symlink resolution into an agent-writable tree.
+The installer refuses a non-root invocation and an existing destination. It copies only the enumerated runtime artifacts to `/opt/plain-relay/kaimono-baton-symphony-control/<version-or-sha>/`, creates a SHA-256 manifest there, and installs a byte-identical launcher at `/opt/plain-relay/kaimono-baton-symphony-launcher`. The control root, manifest, launcher, and trusted executable ancestors must be canonical, root-owned, and not group/other writable. The outer namespace does not mount `/opt`, so neither the active control root nor stable launcher is agent-visible. The host verifies the exact manifest path set and every digest before use. It rejects control/workspace/state overlap in either direction and symlink resolution into an agent-writable tree.
 
 Use private directories on the WSL/Linux filesystem, not `/mnt/c`. The workspace, state, and auth roots must be owned by the Symphony service account and not group/other writable. The auth root contains only `auth.json`:
 
 ```sh
 export SYMPHONY_PILOT_CONTROL_ROOT=/opt/plain-relay/kaimono-baton-symphony-control/<reviewed-version-or-sha>
-export SYMPHONY_PILOT_TRUSTED_LAUNCHER=/usr/local/libexec/kaimono-baton-symphony-launcher
+export SYMPHONY_PILOT_TRUSTED_LAUNCHER=/opt/plain-relay/kaimono-baton-symphony-launcher
 export SYMPHONY_PILOT_WORKSPACE_ROOT=/var/lib/kaimono-baton-symphony/workspaces
 export SYMPHONY_PILOT_STATE_DIR=/var/lib/kaimono-baton-symphony/state
 export SYMPHONY_PILOT_SYMPHONY_ROOT=/opt/plain-relay/openai-symphony-8001b52e
@@ -243,7 +247,7 @@ Run from a dedicated clean `GH-<number>` workspace on the exact installed target
 node scripts/symphony-pilot-isolation-test.mjs
 ```
 
-The test uses Codex app-server `thread/start` and sandboxed `command/exec`; it does not prompt a model or transmit canary contents. It proves:
+The default test uses Codex app-server `thread/start` and sandboxed `command/exec`; it does not prompt a model or transmit canary contents. An explicitly requested `--model-turn` run sends only the fixed synthetic prompt `Return exactly PILOT_MODEL_OK. Do not call tools.` and verifies the response before rerunning the command-network probe. It proves:
 
 1. workspace read succeeds;
 2. workspace write succeeds;
@@ -252,15 +256,18 @@ The test uses Codex app-server `thread/start` and sandboxed `command/exec`; it d
 5. both durable and ephemeral pilot `auth.json` reads fail from the agent sandbox;
 6. unrelated outside-workspace canary read fails;
 7. `/mnt/c` is unavailable;
-8. external network access fails;
+8. model-controlled command external network access fails;
 9. `activePermissionProfile.id` is exactly `symphony-pilot`;
 10. unexpected durable pilot-home `AGENTS.md`, skills, hooks, MCP, or plugin content makes startup fail closed;
-11. the installed control root and finalizer are absent or non-writable inside the agent boundary.
+11. both the installed control root and stable launcher are absent from the agent namespace, and control modification is impossible;
+12. when explicitly enabled, the trusted app-server can complete the fixed no-tool authenticated provider turn while command network remains denied.
 
 Before these checks, the wrapper accepts only Codex 0.147.0 and the test verifies the
 effective granular policy is the exact all-false pilot policy. Missing WSL/Linux,
 `bwrap`, `curl`, exact Codex, config, or expected profile is a hard failure, not a
 skip/pass.
+
+Codex 0.147.0 `:minimal` intentionally includes system runtime paths such as `/usr`; those paths are a non-secret runtime boundary, not a private-control boundary. The more-specific `/usr/local` and `/usr/src` denies are validated in the target gate. Pilot control and auth material must never be placed under system-runtime roots; all stable pilot control lives beneath the outer-unmounted `/opt/plain-relay` root.
 
 ## Start, stop, and rollback
 

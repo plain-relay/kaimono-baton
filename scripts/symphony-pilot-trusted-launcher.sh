@@ -107,6 +107,13 @@ assert_trusted_ancestors "$launcher"
 assert_trusted_ancestors "$node_bin"
 assert_private_directory "$pilot_auth_home"
 
+# The instance UUID is intentionally not sufficient ownership proof: two live
+# Symphony processes can be misconfigured with the same UUID.  Derive the
+# second factor from immutable Linux process state in this trusted launcher.
+. "$control_root/scripts/symphony-pilot-owner-identity.sh"
+owner_process_identity="$(symphony_pilot_owner_process_identity "$owner_instance_id" "$PPID")" || fail owner-process-identity-invalid
+case "$owner_process_identity" in *[!0-9a-f]*|????????????????????????????????????????????????????????????????) ;; *) fail owner-process-identity-invalid ;; esac
+
 overlap "$control_root" "$workspace_root" && fail trusted-path-overlap
 overlap "$control_root" "$workspace" && fail trusted-path-overlap
 overlap "$control_root" "$state_root" && fail trusted-path-overlap
@@ -134,13 +141,13 @@ unset GIT_EXEC_PATH LD_PRELOAD LD_LIBRARY_PATH NODE_OPTIONS NPM_CONFIG_USERCONFI
 
 case "$1:$2" in
   host:prepare|host:finalize)
-    exec "$node_bin" "$control_root/scripts/symphony-pilot-host.mjs" "$2"
+    exec "$node_bin" "$control_root/scripts/symphony-pilot-host.mjs" "$2" "$owner_process_identity"
     ;;
   host:operator-block)
-    exec "$node_bin" "$control_root/scripts/symphony-pilot-host.mjs" operator-block "$3" "$4"
+    exec "$node_bin" "$control_root/scripts/symphony-pilot-host.mjs" operator-block "$owner_process_identity" "$3" "$4"
     ;;
   codex:app-server)
-    exec "$control_root/scripts/symphony-pilot-codex.sh" app-server
+    exec "$control_root/scripts/symphony-pilot-codex.sh" app-server "$owner_process_identity"
     ;;
   *) fail invalid-launcher-mode ;;
 esac

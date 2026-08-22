@@ -53,13 +53,14 @@ const PREPARED_KEYS = new Set([
 ])
 const LAUNCH_PERMIT_KEYS = new Set([
   'schemaVersion', 'issueNumber', 'executionId', 'taskHash', 'baseSha',
-  'ownerInstanceId', 'issuedAt', 'nonce',
+  'ownerInstanceId', 'ownerProcessIdentity', 'issuedAt', 'nonce',
 ])
 const INSTANCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 export const CONTROL_MANIFEST_FILES = Object.freeze([
   'scripts/symphony-pilot-codex.sh',
   'scripts/symphony-pilot-host.mjs',
   'scripts/symphony-pilot-isolation-test.mjs',
+  'scripts/symphony-pilot-owner-identity.sh',
   'scripts/symphony-pilot-trusted-launcher.sh',
   'scripts/verify-symphony-pilot-upstream.mjs',
   'symphony/WORKFLOW.md',
@@ -69,7 +70,7 @@ export const CONTROL_MANIFEST_FILES = Object.freeze([
 
 const PROTECTED_EXACT = new Set([
   '.gitignore', '.npmrc', '.gitmodules', '.gitattributes', 'SECURITY.md', 'AGENTS.md',
-  'package.json', 'package-lock.json',
+  'package.json', 'package-lock.json', 'vite.config.ts',
   'docs/CODEX_WORKFLOW.md',
   'docs/operations/AI_AGENT_POLICY.md',
   'docs/operations/AI_MERGE_APPROVAL.md',
@@ -373,6 +374,37 @@ export function currentInstanceId() {
   return value
 }
 
+function linuxOwnerProcessIdentity(ownerInstanceId) {
+  assert(process.platform === 'linux', 'owner-process-identity-invalid')
+  const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+  assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(bootId), 'owner-process-identity-invalid')
+  let pid = process.ppid
+  for (let depth = 0; depth < 32 && pid > 1; depth += 1) {
+    let stat; let comm
+    try {
+      const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').trim()
+      const close = raw.lastIndexOf(')')
+      assert(close >= 0, 'owner-process-identity-invalid')
+      stat = raw.slice(close + 2).split(/\s+/)
+      comm = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim()
+    } catch { throw new PilotError('owner-process-identity-invalid') }
+    const parent = Number(stat[1]); const start = stat[19]
+    assert(Number.isSafeInteger(parent) && parent > 0 && /^\d+$/.test(start), 'owner-process-identity-invalid')
+    if (!['sh', 'bash', 'dash', 'zsh'].includes(comm) && !comm.startsWith('symphony-pilot-')) {
+      return crypto.createHash('sha256').update(`${ownerInstanceId}\n${bootId}\n${pid}\n${start}\n`).digest('hex')
+    }
+    pid = parent
+  }
+  throw new PilotError('owner-process-identity-invalid')
+}
+
+export function currentOwnerProcessIdentity(ownerInstanceId, suppliedIdentity) {
+  assert(typeof suppliedIdentity === 'string' && SHA64.test(suppliedIdentity), 'owner-process-identity-invalid')
+  const computed = linuxOwnerProcessIdentity(ownerInstanceId)
+  assert(crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(suppliedIdentity)), 'owner-process-identity-mismatch')
+  return computed
+}
+
 function durableWriteJson(target, value) {
   const root = path.dirname(target)
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -455,20 +487,21 @@ function readHostJson(target) {
   } finally { fs.closeSync(fd) }
 }
 
-export function validateLaunchPermit(permit, state, ownerInstanceId, now = Date.now()) {
+export function validateLaunchPermit(permit, state, ownerInstanceId, ownerProcessIdentity, now = Date.now()) {
   exactKeys(permit, LAUNCH_PERMIT_KEYS, 'launch-permit-invalid')
   assert(permit.schemaVersion === 1, 'launch-permit-invalid')
   assert(Number.isSafeInteger(permit.issueNumber) && permit.issueNumber > 0, 'launch-permit-invalid')
   assert(Number.isSafeInteger(permit.executionId) && permit.executionId > 0, 'launch-permit-invalid')
   assert(SHA64.test(permit.taskHash) && SHA40.test(permit.baseSha), 'launch-permit-invalid')
   assert(INSTANCE_ID.test(permit.ownerInstanceId) && permit.ownerInstanceId === ownerInstanceId, 'launch-permit-owner-mismatch')
+  assert(SHA64.test(permit.ownerProcessIdentity) && permit.ownerProcessIdentity === ownerProcessIdentity, 'launch-permit-owner-mismatch')
   assert(typeof permit.nonce === 'string' && /^[0-9a-f]{48}$/.test(permit.nonce), 'launch-permit-invalid')
   const issuedAt = Date.parse(permit.issuedAt)
   assert(Number.isFinite(issuedAt) && issuedAt <= now + 5_000 && now - issuedAt <= 60_000, 'launch-permit-expired')
   assert(state?.state === 'claimed', 'launch-state-invalid')
   assert(state.issueNumber === permit.issueNumber && state.executionId === permit.executionId, 'launch-permit-state-mismatch')
   assert(state.taskHash === permit.taskHash && state.baseSha === permit.baseSha, 'launch-permit-state-mismatch')
-  assert(state.ownerInstanceId === permit.ownerInstanceId, 'launch-permit-owner-mismatch')
+  assert(state.ownerInstanceId === permit.ownerInstanceId && state.ownerProcessIdentity === permit.ownerProcessIdentity, 'launch-permit-owner-mismatch')
   return permit
 }
 
@@ -478,26 +511,26 @@ function issueLaunchPermit(issueNumber, state) {
   writeExclusiveHostJson(target, {
     schemaVersion: 1, issueNumber, executionId: state.executionId,
     taskHash: state.taskHash, baseSha: state.baseSha,
-    ownerInstanceId: state.ownerInstanceId,
+    ownerInstanceId: state.ownerInstanceId, ownerProcessIdentity: state.ownerProcessIdentity,
     issuedAt: new Date().toISOString(), nonce: crypto.randomBytes(24).toString('hex'),
   })
 }
 
-export function consumeLaunchPermit(cwd) {
+export function consumeLaunchPermit(cwd, ownerProcessIdentity) {
   const issueNumber = deriveIssueNumber(cwd)
   const state = readState(issueNumber)
   assert(state, 'persistent-state-missing')
   const target = launchPermitPath(issueNumber, state.executionId)
   assert(fs.existsSync(target), 'launch-permit-missing')
-  validateLaunchPermit(readHostJson(target), { ...state, issueNumber }, currentInstanceId())
+  validateLaunchPermit(readHostJson(target), { ...state, issueNumber }, currentInstanceId(), ownerProcessIdentity)
   const consumed = `${target}.consumed-${process.pid}-${crypto.randomBytes(8).toString('hex')}`
   fs.renameSync(target, consumed)
   fs.unlinkSync(consumed)
   console.log(`[symphony-pilot] launch-permit-consumed GH-${issueNumber}`)
 }
 
-export function runIfExecutionOwner(state, ownerInstanceId, action) {
-  if (state?.ownerInstanceId !== ownerInstanceId) return { status: 'non-owner' }
+export function runIfExecutionOwner(state, ownerInstanceId, ownerProcessIdentity, action) {
+  if (state?.ownerInstanceId !== ownerInstanceId || state?.ownerProcessIdentity !== ownerProcessIdentity) return { status: 'non-owner' }
   return { status: 'owner', value: action() }
 }
 
@@ -658,6 +691,24 @@ function deriveIssueNumber(cwd) {
   return value
 }
 
+export function classifyGitHubResponse(response, { expectedStatuses = [] } = {}) {
+  const status = response?.status
+  if (expectedStatuses.includes(status)) return 'expected'
+  if (response?.ok) return 'ok'
+  if (status === 408 || status === 429 || (Number.isInteger(status) && status >= 500 && status <= 599)) return 'transient'
+  return 'permanent'
+}
+
+export function classifyGitHubTransportError() {
+  return 'transient'
+}
+
+function requireGitHubResponse(response, options = {}) {
+  const classification = classifyGitHubResponse(response, options)
+  if (classification === 'ok' || classification === 'expected') return classification
+  throw new PilotError(classification === 'transient' ? 'github-transient-failure' : 'github-permanent-failure')
+}
+
 async function githubRequest(pathname, { method = 'GET', body, authenticated = false } = {}) {
   const headers = {
     Accept: 'application/vnd.github+json',
@@ -671,17 +722,17 @@ async function githubRequest(pathname, { method = 'GET', body, authenticated = f
   }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   try { return await fetch(`https://api.github.com${pathname}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }) }
-  catch { throw new PilotError('github-transient-failure') }
+  catch { throw new PilotError(classifyGitHubTransportError() === 'transient' ? 'github-transient-failure' : 'github-permanent-failure') }
 }
 
 async function fetchIssueSnapshot(issueNumber) {
   const issueResponse = await githubRequest(`/repos/${PILOT.repository}/issues/${issueNumber}`)
-  assert(issueResponse.ok, 'github-transient-failure')
+  requireGitHubResponse(issueResponse)
   const issue = await issueResponse.json()
   const comments = []
   for (let page = 1; page <= 10; page += 1) {
     const response = await githubRequest(`/repos/${PILOT.repository}/issues/${issueNumber}/comments?per_page=100&page=${page}`)
-    assert(response.ok, 'github-transient-failure')
+    requireGitHubResponse(response)
     const items = await response.json()
     assert(Array.isArray(items), 'github-transient-failure')
     comments.push(...items)
@@ -705,10 +756,11 @@ export function validateIssueSnapshot(snapshot, expectedTask = null) {
 
 async function ensureNoRemoteHandoff(issueNumber, branchName) {
   const branch = await githubRequest(`/repos/${PILOT.repository}/branches/${encodeURIComponent(branchName)}`)
-  assert(branch.status === 404, 'remote-branch-already-exists')
+  assert(requireGitHubResponse(branch, { expectedStatuses: [404] }) === 'expected', 'remote-branch-already-exists')
   const head = encodeURIComponent(`${PILOT.owner}:${branchName}`)
   const prs = await githubRequest(`/repos/${PILOT.repository}/pulls?state=open&head=${head}`)
-  assert(prs.ok && (await prs.json()).length === 0, 'open-pr-already-exists')
+  requireGitHubResponse(prs)
+  assert((await prs.json()).length === 0, 'open-pr-already-exists')
 }
 
 function verifyRuntimePins(cwd) {
@@ -791,6 +843,7 @@ function workspaceIndexPath(cwd) {
 async function prepare(cwd) {
   const issueNumber = deriveIssueNumber(cwd)
   const ownerInstanceId = currentInstanceId()
+  const ownerProcessIdentity = currentOwnerProcessIdentity(ownerInstanceId, process.argv[3])
   const issueLock = acquireIssueLock(issueNumber)
   let task = null
   let executionLock = null
@@ -807,7 +860,7 @@ async function prepare(cwd) {
     writeState(issueNumber, {
       schemaVersion: 3, state: 'preparing', issueNumber, executionId: task.executionId,
       taskHash: taskHash(task), baseSha: task.baseSha,
-      branchName: `codex/gh-${issueNumber}`, ownerInstanceId,
+      branchName: `codex/gh-${issueNumber}`, ownerInstanceId, ownerProcessIdentity,
       claimGeneration: crypto.randomBytes(16).toString('hex'),
     })
     // No other process may mutate this deterministic execution workspace after this point.
@@ -833,7 +886,7 @@ async function prepare(cwd) {
     const claimed = {
       schemaVersion: 3, state: 'claimed', issueNumber, executionId: task.executionId,
       taskHash: taskHash(task), baseSha: task.baseSha, branchName,
-      ownerInstanceId, claimedAt: new Date().toISOString(),
+      ownerInstanceId, ownerProcessIdentity, claimedAt: new Date().toISOString(),
       claimGeneration: crypto.randomBytes(16).toString('hex'),
       gitConfigHash: fileHash(path.join(cwd, '.git', 'config')),
       indexHash: fileHash(index), refsHash: refsHash(cwd),
@@ -842,7 +895,7 @@ async function prepare(cwd) {
     writeState(issueNumber, claimed)
     issueLaunchPermit(issueNumber, claimed)
   } catch (error) {
-    const blockerCode = persistPermanentPrepareFailure(issueNumber, ownerInstanceId, task, error)
+    const blockerCode = persistPermanentPrepareFailure(issueNumber, ownerInstanceId, ownerProcessIdentity, task, error)
     if (blockerCode) {
       // This is the last operation in the failed prepare phase; no npm/test/application command follows credential use.
       try { await removeLabel(issueNumber) } catch {}
@@ -865,18 +918,18 @@ export function permanentBlocker(error) {
   return 'repository-state-conflict'
 }
 
-export function persistPermanentPrepareFailure(issueNumber, ownerInstanceId, task, error) {
+export function persistPermanentPrepareFailure(issueNumber, ownerInstanceId, ownerProcessIdentity, task, error) {
   const blockerCode = permanentBlocker(error)
   if (!blockerCode) return null
   const state = readState(issueNumber)
-  if (task && state?.executionId === task.executionId && state.state === 'preparing' && state.ownerInstanceId === ownerInstanceId) {
+  if (task && state?.executionId === task.executionId && state.state === 'preparing' && state.ownerInstanceId === ownerInstanceId && state.ownerProcessIdentity === ownerProcessIdentity) {
     writeState(issueNumber, { ...state, state: 'blocked', blockerCode })
   } else if (!state) {
     writeState(issueNumber, {
       schemaVersion: 3, state: 'blocked', issueNumber,
       executionId: task?.executionId ?? 0,
       taskHash: task ? taskHash(task) : null, baseSha: task?.baseSha ?? null,
-      branchName: `codex/gh-${issueNumber}`, ownerInstanceId, blockerCode,
+      branchName: `codex/gh-${issueNumber}`, ownerInstanceId, ownerProcessIdentity, blockerCode,
     })
   }
   return blockerCode
@@ -993,9 +1046,9 @@ function prBody({ issueNumber, baseSha, commitSha, changedPaths }) {
 async function createDraftPr(issueNumber, state) {
   const head = encodeURIComponent(`${PILOT.owner}:${state.branchName}`)
   const list = await githubRequest(`/repos/${PILOT.repository}/pulls?state=open&head=${head}`)
-  assert(list.ok, 'github-pr-list-failed')
+  requireGitHubResponse(list)
   const existing = await list.json()
-  assert(Array.isArray(existing) && existing.length <= 1, 'github-pr-list-failed')
+  assert(Array.isArray(existing) && existing.length <= 1, 'github-pr-list-invalid')
   const body = prBody({ issueNumber, baseSha: state.baseSha, commitSha: state.commitSha, changedPaths: state.changedPaths })
   if (existing.length === 1) {
     const pr = existing[0]
@@ -1003,7 +1056,7 @@ async function createDraftPr(issueNumber, state) {
     const update = await githubRequest(`/repos/${PILOT.repository}/pulls/${pr.number}`, {
       method: 'PATCH', authenticated: true, body: { body },
     })
-    assert(update.ok, 'github-pr-update-failed')
+    requireGitHubResponse(update)
     return pr.number
   }
   const response = await githubRequest(`/repos/${PILOT.repository}/pulls`, {
@@ -1014,15 +1067,15 @@ async function createDraftPr(issueNumber, state) {
       body,
     },
   })
-  assert(response.ok, 'github-pr-create-failed')
+  requireGitHubResponse(response)
   const pr = await response.json()
-  assert(Number.isInteger(pr.number) && pr.draft === true, 'github-pr-create-failed')
+  assert(Number.isInteger(pr.number) && pr.draft === true, 'github-pr-create-invalid')
   return pr.number
 }
 
 async function removeLabel(issueNumber) {
   const response = await githubRequest(`/repos/${PILOT.repository}/issues/${issueNumber}/labels/${encodeURIComponent(PILOT.label)}`, { method: 'DELETE', authenticated: true })
-  assert(response.ok || response.status === 404, 'github-label-cleanup-failed')
+  requireGitHubResponse(response, { expectedStatuses: [404] })
 }
 
 async function finalize(cwd) {
@@ -1030,7 +1083,8 @@ async function finalize(cwd) {
   let state = readState(issueNumber)
   assert(state, 'persistent-state-missing')
   const ownerInstanceId = currentInstanceId()
-  if (runIfExecutionOwner(state, ownerInstanceId, () => true).status === 'non-owner') {
+  const ownerProcessIdentity = currentOwnerProcessIdentity(ownerInstanceId, process.argv[3])
+  if (runIfExecutionOwner(state, ownerInstanceId, ownerProcessIdentity, () => true).status === 'non-owner') {
     // A losing Symphony process must not inspect another owner's workspace handoff,
     // alter its state, remove its label, commit, push, or update its PR.
     console.log(`[symphony-pilot] non-owner-finalize-noop GH-${issueNumber}`)
@@ -1079,8 +1133,12 @@ async function finalize(cwd) {
     console.log(`[symphony-pilot] completed GH-${issueNumber}`)
   } catch (error) {
     const latest = readState(issueNumber)
-    if (latest?.state === 'claimed' && latest.ownerInstanceId === ownerInstanceId) {
+    if (latest?.state === 'claimed' && latest.ownerInstanceId === ownerInstanceId && latest.ownerProcessIdentity === ownerProcessIdentity) {
       writeState(issueNumber, { ...latest, state: 'blocked', blockerCode: error instanceof PilotError && BLOCKERS.has(error.code) ? error.code : 'repository-state-conflict' })
+      try { await removeLabel(issueNumber) } catch {}
+    } else if (latest?.state === 'finalizing' && latest.ownerInstanceId === ownerInstanceId && latest.ownerProcessIdentity === ownerProcessIdentity && permanentBlocker(error)) {
+      // A persistent API rejection cannot become an unbounded recovery loop.
+      writeState(issueNumber, { ...latest, state: 'blocked', blockerCode: permanentBlocker(error) })
       try { await removeLabel(issueNumber) } catch {}
     }
     // finalizing retains its exact durable object identity for host-only recovery.
@@ -1099,11 +1157,11 @@ function operatorBlock(issueNumber, executionId) {
 }
 
 async function main() {
-  const [mode, issueArg, executionArg] = process.argv.slice(2)
+  const [mode, ownerProcessIdentity, issueArg, executionArg] = process.argv.slice(2)
   try {
     if (mode === 'prepare') await prepare(process.cwd())
     else if (mode === 'finalize') await finalize(process.cwd())
-    else if (mode === 'consume-launch-permit') { verifyRuntimePins(process.cwd()); consumeLaunchPermit(process.cwd()) }
+    else if (mode === 'consume-launch-permit') { verifyRuntimePins(process.cwd()); consumeLaunchPermit(process.cwd(), currentOwnerProcessIdentity(currentInstanceId(), ownerProcessIdentity)) }
     else if (mode === 'validate-pilot-auth-store') {
       verifyRuntimePins(process.cwd())
       validatePilotAuthStore(process.env.SYMPHONY_PILOT_CODEX_HOME?.trim() || '')

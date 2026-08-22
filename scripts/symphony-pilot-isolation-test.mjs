@@ -8,8 +8,10 @@ import { spawn, spawnSync } from 'node:child_process'
 
 const PROFILE = 'symphony-pilot'
 const APPROVAL_FIELDS = ['mcp_elicitations', 'request_permissions', 'rules', 'sandbox_approval', 'skill_approval']
-const configOnly = process.argv[2] === '--config-only'
-if (process.argv.length > (configOnly ? 3 : 2)) fail('unexpected-argument')
+const options = new Set(process.argv.slice(2))
+if ([...options].some((option) => !['--config-only', '--model-turn'].includes(option)) || options.size > 1) fail('unexpected-argument')
+const configOnly = options.has('--config-only')
+const modelTurn = options.has('--model-turn')
 
 function fail(code) { throw new Error(code) }
 function requireEnv(name) { const value = process.env[name]?.trim(); if (!value) fail(`missing-${name.toLowerCase()}`); return path.resolve(value) }
@@ -32,6 +34,8 @@ const bwrapHelp = spawnSync(bwrap, ['--help'], { encoding: 'utf8' })
 if (bwrapHelp.status !== 0 || !`${bwrapHelp.stdout}${bwrapHelp.stderr}`.includes('--perms')) fail('bwrap-perms-unsupported')
 if (spawnSync('/usr/bin/curl', ['--version']).status !== 0) fail('curl-missing')
 if (!fs.statSync(launcher).isFile()) fail('trusted-launcher-missing')
+const identityHelper = path.join(controlRoot, 'scripts', 'symphony-pilot-owner-identity.sh')
+if (!fs.statSync(identityHelper).isFile()) fail('owner-identity-helper-missing')
 
 const unexpectedPilotHomeEntries = [
   { id: '10A', label: 'pilot-home-AGENTS', path: path.join(pilotHome, 'AGENTS.md'), kind: 'file', content: 'UNTRUSTED_INSTRUCTION\n' },
@@ -80,13 +84,16 @@ const issueNumber = Number(issueMatch[1])
 const executionId = Number(`9${crypto.randomInt(100000, 999999)}`)
 const ownerInstanceId = process.env.SYMPHONY_PILOT_INSTANCE_ID?.trim()
 if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(ownerInstanceId || '')) fail('invalid-instance-id')
+const ownerIdentityResult = spawnSync('/bin/sh', ['-c', '. "$1"; symphony_pilot_owner_process_identity "$2" "$PPID"', 'sh', identityHelper, ownerInstanceId], { encoding: 'utf8' })
+const ownerProcessIdentity = ownerIdentityResult.status === 0 ? ownerIdentityResult.stdout.trim() : ''
+if (!/^[0-9a-f]{64}$/.test(ownerProcessIdentity)) fail('owner-process-identity-invalid')
 const statePath = path.join(stateRoot, `GH-${issueNumber}.json`)
 const permitsDir = path.join(stateRoot, 'launch-permits')
 const permitPath = path.join(permitsDir, `GH-${issueNumber}-${executionId}.json`)
 if (fs.existsSync(statePath) || fs.existsSync(permitPath)) fail('isolation-state-not-empty')
 fs.mkdirSync(permitsDir, { recursive: true, mode: 0o700 })
-const claim = { schemaVersion: 3, state: 'claimed', issueNumber, executionId, taskHash: crypto.randomBytes(32).toString('hex'), baseSha: crypto.randomBytes(20).toString('hex'), ownerInstanceId }
-const permit = { schemaVersion: 1, issueNumber, executionId, taskHash: claim.taskHash, baseSha: claim.baseSha, ownerInstanceId, issuedAt: new Date().toISOString(), nonce: crypto.randomBytes(24).toString('hex') }
+const claim = { schemaVersion: 3, state: 'claimed', issueNumber, executionId, taskHash: crypto.randomBytes(32).toString('hex'), baseSha: crypto.randomBytes(20).toString('hex'), ownerInstanceId, ownerProcessIdentity }
+const permit = { schemaVersion: 1, issueNumber, executionId, taskHash: claim.taskHash, baseSha: claim.baseSha, ownerInstanceId, ownerProcessIdentity, issuedAt: new Date().toISOString(), nonce: crypto.randomBytes(24).toString('hex') }
 fs.writeFileSync(statePath, `${JSON.stringify(claim)}\n`, { flag: 'wx', mode: 0o600 })
 fs.writeFileSync(permitPath, `${JSON.stringify(permit)}\n`, { flag: 'wx', mode: 0o600 })
 
@@ -118,8 +125,12 @@ const child = spawn(launcher, ['codex', 'app-server'], {
 let buffer = ''
 let nextId = 1
 const pending = new Map()
+const notifications = []
+const notificationWaiters = []
+let childStderr = ''
 child.stdout.setEncoding('utf8')
-child.stderr.resume()
+child.stderr.setEncoding('utf8')
+child.stderr.on('data', (chunk) => { childStderr += chunk.slice(0, 4096) })
 child.stdout.on('data', (chunk) => {
   buffer += chunk
   while (buffer.includes('\n')) {
@@ -131,11 +142,21 @@ child.stdout.on('data', (chunk) => {
     if (message.id !== undefined && pending.has(message.id)) {
       const { resolve, reject } = pending.get(message.id); pending.delete(message.id)
       if (message.error) reject(new Error('app-server-rpc-error')); else resolve(message.result)
+    } else if (typeof message.method === 'string') {
+      notifications.push(message)
+      for (const waiter of notificationWaiters.splice(0)) waiter()
     }
   }
 })
+function appServerExitError() {
+  const explicit = childStderr.match(/\[symphony-pilot\] ([a-z0-9-]+)/)?.[1]
+  if (explicit) return new Error(`app-server-exited-${explicit}`)
+  const known = ['owner-process-identity-mismatch', 'owner-process-identity-invalid', 'launch-permit', 'control-file-digest-mismatch', 'inner-bwrap-discovery-failed']
+  const code = known.find((candidate) => childStderr.includes(candidate))
+  return new Error(code ? `app-server-exited-${code}` : 'app-server-exited')
+}
 child.on('exit', () => {
-  for (const { reject } of pending.values()) reject(new Error('app-server-exited'))
+  for (const { reject } of pending.values()) reject(appServerExitError())
   pending.clear()
 })
 
@@ -145,6 +166,20 @@ function rpc(method, params) {
     pending.set(id, { resolve, reject })
     child.stdin.write(`${JSON.stringify({ id, method, params })}\n`)
   })
+}
+
+async function waitForNotification(method, predicate, timeoutMs = 120000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const found = notifications.find((message) => message.method === method && predicate(message.params))
+    if (found) return found
+    await new Promise((resolve) => {
+      const remaining = Math.max(1, deadline - Date.now())
+      const timer = setTimeout(resolve, remaining)
+      notificationWaiters.push(() => { clearTimeout(timer); resolve() })
+    })
+  }
+  throw new Error('app-server-notification-timeout')
 }
 
 function waitForChildExit(timeoutMs) {
@@ -198,25 +233,31 @@ async function runInvariant({ id, label, command, expectedExit = 0, expectedStdo
 }
 
 async function runControlVisibilityInvariant() {
-  let status = 'status=unknown'
-  try {
-    const result = await rpc('command/exec', {
-      command: ['/bin/sh', '-c', `test ! -e ${quote(controlRoot)}`],
-      cwd: workspace,
-      permissionProfile: PROFILE,
-      timeoutMs: 15000,
-      outputBytesCap: 1024,
-    })
-    if (String(result?.stdout ?? '') !== '') status = 'status=unexpected-output'
-    else if (result?.exitCode === 0) status = 'state=absent'
-    else if (result?.exitCode === 1 && commandFailureStatus(result) === 'exit=1') status = 'state=visible'
-    else status = commandFailureStatus(result)
-  } catch (error) {
-    status = error?.message === 'app-server-exited' ? 'status=app-server-exited' : 'status=app-server-rpc-error'
+  return runInvariant({
+    id: '11A',
+    label: 'control-visibility',
+    command: ['/bin/sh', '-c', `test ! -e ${quote(controlRoot)} && test ! -e ${quote(launcher)} && test ! -r /usr/local && test ! -r /usr/src`],
+  })
+}
+
+async function runAuthenticatedModelTurn(thread) {
+  const turn = await rpc('turn/start', {
+    threadId: thread.thread.id,
+    cwd: workspace,
+    permissions: PROFILE,
+    environments: [],
+    input: [{ type: 'text', text: 'Return exactly PILOT_MODEL_OK. Do not call tools.' }],
+  })
+  const completed = await waitForNotification('turn/completed', (params) => params?.turn?.id === turn?.turn?.id)
+  const items = completed.params?.turn?.items
+  if (completed.params?.turn?.status !== 'completed' || !Array.isArray(items)) {
+    const status = String(completed.params?.turn?.status ?? 'unknown').replace(/[^a-z-]/gi, '')
+    const code = String(completed.params?.turn?.error?.code ?? 'no-code').replace(/[^a-z-]/gi, '')
+    throw new Error(`model-turn-not-completed-${status}-${code}`)
   }
-  const passed = status === 'state=absent' || status === 'state=visible'
-  reportInvariant('11A', 'control-visibility', passed, status)
-  return passed
+  const usedTool = items.some((item) => /(?:command|tool|mcp|web|function|exec)/i.test(String(item?.type ?? '')))
+  const messages = items.filter((item) => item?.type === 'agentMessage').map((item) => item.text)
+  if (usedTool || messages.length !== 1 || messages[0]?.trim() !== 'PILOT_MODEL_OK') throw new Error('model-turn-output-invalid')
 }
 
 function verifyControlFilesNotWritableByServiceUser() {
@@ -314,6 +355,17 @@ try {
       label: 'mnt-c',
       command: ['/bin/sh', '-c', 'test ! -e /mnt/c'],
     }))
+    let authenticatedModelTurn = true
+    let modelTurnStatus = ''
+    if (modelTurn) {
+      try { await runAuthenticatedModelTurn(thread) }
+      catch (error) {
+        authenticatedModelTurn = false
+        modelTurnStatus = /^(?:app-server-exited|app-server-rpc-error|app-server-notification-timeout|model-turn-[a-z-]+)$/.test(error?.message || '') ? `status=${error.message}` : 'status=model-turn-failed'
+      }
+    }
+    // This command probe deliberately runs after the real provider turn.  It
+    // proves the outer provider network did not leak into Codex command/exec.
     const routeIsolated = await runInvariant({
       id: '08A',
       label: 'network-route',
@@ -340,6 +392,10 @@ try {
       command: ['/bin/sh', '-c', `if test ! -e ${quote(controlRoot)}; then exit 0; fi; test ! -w ${quote(controlRoot)} && test ! -w ${quote(controlFinalizer)} && test ! -w ${quote(launcher)}`],
       hostCheck: verifyControlFilesNotWritableByServiceUser,
     }))
+    if (modelTurn) {
+      reportInvariant('12', 'authenticated-model-turn', authenticatedModelTurn, modelTurnStatus)
+      results.push(authenticatedModelTurn)
+    }
     const passed = results.every(Boolean)
     console.log(`OVERALL ${passed ? 'PASS' : 'FAIL'}`)
     if (!passed) process.exitCode = 1

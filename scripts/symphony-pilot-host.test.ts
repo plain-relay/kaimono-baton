@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import {
-  CONTROL_MANIFEST_FILES, PilotError, PILOT, acquireExecutionLock, assertSafeLocalGitConfig, buildValidatedTree, captureAgentGitState, collectChangedPaths,
+  CONTROL_MANIFEST_FILES, PilotError, PILOT, acquireExecutionLock, assertSafeLocalGitConfig, buildValidatedTree, captureAgentGitState, classifyGitHubResponse, classifyGitHubTransportError, collectChangedPaths,
   consumeLaunchPermit,
   extractAndValidateApproval, extractAndValidateSafeTask, hasTrustedApproval,
   isPathAllowed, isProtectedPath, parseLsTreeRecord, permanentBlocker, persistPermanentPrepareFailure, privilegedGit, privilegedGitEnv, readSafeJson,
@@ -116,7 +116,7 @@ describe('paths and approved-base references', () => {
     for (const p of ['../src', '/src', 'C:/src', 'src\\pages', 'src/ページ']) expect(() => validateRepoPath(p)).toThrow(PilotError)
     expect(isPathAllowed('src/pages2/x.ts', ['src/pages'])).toBe(false)
     expect(isPathAllowed('src/pages/x.ts', ['src/pages'])).toBe(true)
-    for (const p of ['SECURITY.md', 'AGENTS.md', '.github/x', '.codex/x', '.agents/x', 'symphony/WORKFLOW.md', '.npmrc', '.gitmodules', '.gitattributes', 'package.json', 'package-lock.json']) {
+    for (const p of ['SECURITY.md', 'AGENTS.md', '.github/x', '.codex/x', '.agents/x', 'symphony/WORKFLOW.md', '.npmrc', '.gitmodules', '.gitattributes', 'package.json', 'package-lock.json', 'vite.config.ts']) {
       expect(isProtectedPath(p)).toBe(true)
       expect(() => validateSafeTask(validTask({ scopePaths: [p] }))).toThrow(PilotError)
     }
@@ -125,6 +125,7 @@ describe('paths and approved-base references', () => {
     for (const p of [
       'scripts/symphony-pilot-host.mjs', 'scripts/symphony-pilot-host.test.ts',
       'scripts/symphony-pilot-codex.sh', 'scripts/symphony-pilot-isolation-test.mjs',
+      'scripts/symphony-pilot-owner-identity.sh',
       'scripts/symphony-pilot-trusted-launcher.sh', 'scripts/symphony-pilot-new-security-test.ts',
       'scripts/verify-symphony-pilot-upstream.mjs', 'scripts/install-symphony-pilot-control.sh', 'symphony/WORKFLOW.md',
       'symphony/codex/config.toml', 'symphony/patches/0001-disable-github-agent-tool.patch',
@@ -235,20 +236,24 @@ describe('trusted control, pilot home, and launch permit', () => {
     for (const value of [config, operations]) expect(value).toContain('"/pilot-runtime/codex" = "read"')
     expect(config).not.toContain('":root" = "read"')
     expect(config).not.toContain('"/pilot-runtime" = "read"')
+    expect(config).toContain('"/usr/local" = "deny"')
+    expect(config).toContain('"/usr/src" = "deny"')
   })
   it('rejects missing and mismatched one-use launch permits', () => {
     const stateRoot = temp('permit'); process.env.SYMPHONY_PILOT_STATE_DIR = stateRoot
     process.env.SYMPHONY_PILOT_INSTANCE_ID = '11111111-1111-4111-8111-111111111111'
     const workspace = path.join(temp('workspaces'), 'GH-6'); fs.mkdirSync(workspace)
-    const state = { state: 'claimed', issueNumber: 6, executionId: 9, taskHash: 'a'.repeat(64), baseSha: 'b'.repeat(40), ownerInstanceId: process.env.SYMPHONY_PILOT_INSTANCE_ID }
+    const ownerProcessIdentity = 'c'.repeat(64)
+    const state = { state: 'claimed', issueNumber: 6, executionId: 9, taskHash: 'a'.repeat(64), baseSha: 'b'.repeat(40), ownerInstanceId: process.env.SYMPHONY_PILOT_INSTANCE_ID, ownerProcessIdentity }
     fs.writeFileSync(path.join(stateRoot, 'GH-6.json'), JSON.stringify(state))
     expect(() => consumeLaunchPermit(workspace)).toThrow(PilotError)
-    const valid = { schemaVersion: 1, issueNumber: 6, executionId: 9, taskHash: state.taskHash, baseSha: state.baseSha, ownerInstanceId: state.ownerInstanceId, issuedAt: new Date().toISOString(), nonce: 'c'.repeat(48) }
-    expect(validateLaunchPermit(valid, state, state.ownerInstanceId).executionId).toBe(9)
+    const valid = { schemaVersion: 1, issueNumber: 6, executionId: 9, taskHash: state.taskHash, baseSha: state.baseSha, ownerInstanceId: state.ownerInstanceId, ownerProcessIdentity, issuedAt: new Date().toISOString(), nonce: 'c'.repeat(48) }
+    expect(validateLaunchPermit(valid, state, state.ownerInstanceId, ownerProcessIdentity).executionId).toBe(9)
     for (const mutation of [
       { executionId: 10 }, { taskHash: 'd'.repeat(64) }, { baseSha: 'e'.repeat(40) },
       { ownerInstanceId: '22222222-2222-4222-8222-222222222222' },
-    ]) expect(() => validateLaunchPermit({ ...valid, ...mutation }, state, state.ownerInstanceId)).toThrow(PilotError)
+      { ownerProcessIdentity: 'd'.repeat(64) },
+    ]) expect(() => validateLaunchPermit({ ...valid, ...mutation }, state, state.ownerInstanceId, ownerProcessIdentity)).toThrow(PilotError)
   })
 })
 
@@ -266,13 +271,28 @@ describe('atomic execution and exact tree', () => {
   })
   it('makes a competing owner finalizer a cross-process no-op', async () => {
     const root = temp('owners'); const marker = path.join(root, 'finalized'); const url = pathToFileURL(path.resolve('scripts/symphony-pilot-host.mjs')).href
-    const ownerA = '11111111-1111-4111-8111-111111111111'; const ownerB = '22222222-2222-4222-8222-222222222222'
+    const ownerA = '11111111-1111-4111-8111-111111111111'; const ownerB = '22222222-2222-4222-8222-222222222222'; const identityA = 'a'.repeat(64); const identityB = 'b'.repeat(64)
     acquireExecutionLock(root, 6, 9) // owner A's successful prepare claim
-    const code = `import fs from 'node:fs';import {acquireExecutionLock,runIfExecutionOwner} from ${JSON.stringify(url)};if(process.argv[1]!==${JSON.stringify(ownerA)}){try{acquireExecutionLock(process.argv[3],6,9);process.exit(91)}catch{}}const result=runIfExecutionOwner({ownerInstanceId:${JSON.stringify(ownerA)}},process.argv[1],()=>fs.appendFileSync(process.argv[2],process.argv[1]));if(result.status==='non-owner')process.exit(23)`
-    const run = (owner: string) => new Promise<number>((resolve) => { const child = spawn(process.execPath, ['--input-type=module', '-e', code, owner, marker, root]); child.on('exit', (c) => resolve(c ?? 99)) })
-    expect(await run(ownerB)).toBe(23); expect(fs.existsSync(marker)).toBe(false)
-    expect(await run(ownerA)).toBe(0); expect(fs.readFileSync(marker, 'utf8')).toBe(ownerA)
-    expect(runIfExecutionOwner({ ownerInstanceId: ownerA }, ownerB, () => { throw new Error('must not execute') }).status).toBe('non-owner')
+    const code = `import fs from 'node:fs';import {acquireExecutionLock,runIfExecutionOwner} from ${JSON.stringify(url)};if(process.argv[1]!==${JSON.stringify(ownerA)}){try{acquireExecutionLock(process.argv[4],6,9);process.exit(91)}catch{}}const result=runIfExecutionOwner({ownerInstanceId:${JSON.stringify(ownerA)},ownerProcessIdentity:${JSON.stringify(identityA)}},process.argv[1],process.argv[2],()=>fs.appendFileSync(process.argv[3],process.argv[1]));if(result.status==='non-owner')process.exit(23)`
+    const run = (owner: string, identity: string) => new Promise<number>((resolve) => { const child = spawn(process.execPath, ['--input-type=module', '-e', code, owner, identity, marker, root]); child.on('exit', (c) => resolve(c ?? 99)) })
+    expect(await run(ownerA, identityB)).toBe(23); expect(fs.existsSync(marker)).toBe(false)
+    expect(await run(ownerA, identityA)).toBe(0); expect(fs.readFileSync(marker, 'utf8')).toBe(ownerA)
+    expect(runIfExecutionOwner({ ownerInstanceId: ownerA, ownerProcessIdentity: identityA }, ownerA, identityB, () => { throw new Error('must not execute') }).status).toBe('non-owner')
+  })
+  it.runIf(process.platform === 'linux')('derives distinct owner process identities for two live processes with the same UUID', async () => {
+    const helper = path.resolve('scripts/symphony-pilot-owner-identity.sh')
+    const instanceId = '11111111-1111-4111-8111-111111111111'
+    const code = `import {spawnSync} from 'node:child_process';const result=spawnSync('/bin/sh',['-c','. "$1"; symphony_pilot_owner_process_identity "$2" "$PPID"','sh',process.argv[1],process.argv[2]],{encoding:'utf8'});if(result.status!==0)process.exit(1);process.stdout.write(result.stdout.trim())`
+    const run = () => new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code, helper, instanceId])
+      let output = ''; child.stdout.on('data', (chunk) => { output += chunk })
+      child.on('exit', (status) => status === 0 ? resolve(output.trim()) : reject(new Error(`identity-child-${status}`)))
+    })
+    const [identityA, identityB] = await Promise.all([run(), run()])
+    expect(identityA).toMatch(/^[0-9a-f]{64}$/)
+    expect(identityB).toMatch(/^[0-9a-f]{64}$/)
+    expect(identityA).not.toBe(identityB)
+    expect(runIfExecutionOwner({ ownerInstanceId: instanceId, ownerProcessIdentity: identityA }, instanceId, identityB, () => { throw new Error('loser-executed') }).status).toBe('non-owner')
   })
   it('classifies deterministic pre-launch failures as durable blockers and remote reads as transient', () => {
     for (const code of ['invalid-task-schema', 'matching-trusted-approval-missing', 'invalid-base-sha', 'unsafe-file-type', 'symphony-version-mismatch', 'trusted-path-overlap']) {
@@ -283,9 +303,22 @@ describe('atomic execution and exact tree', () => {
     expect(permanentBlocker(new PilotError('issue-lock-held'))).toBeNull()
     const root = temp('permanent-state'); process.env.SYMPHONY_PILOT_STATE_DIR = root
     const owner = '11111111-1111-4111-8111-111111111111'; const task = validTask({ baseSha: 'b'.repeat(40), executionId: 17 })
-    expect(persistPermanentPrepareFailure(6, owner, task, new PilotError('invalid-task-schema'))).toBe('repository-state-conflict')
+    const ownerProcessIdentity = 'a'.repeat(64)
+    expect(persistPermanentPrepareFailure(6, owner, ownerProcessIdentity, task, new PilotError('invalid-task-schema'))).toBe('repository-state-conflict')
     const state = JSON.parse(fs.readFileSync(path.join(root, 'GH-6.json'), 'utf8'))
-    expect(state).toMatchObject({ state: 'blocked', executionId: 17, ownerInstanceId: owner, blockerCode: 'repository-state-conflict' })
+    expect(state).toMatchObject({ state: 'blocked', executionId: 17, ownerInstanceId: owner, ownerProcessIdentity, blockerCode: 'repository-state-conflict' })
+  })
+
+  it('classifies GitHub HTTP failures once, with expected endpoint 404s distinct from permanent failures', () => {
+    const response = (status: number) => ({ status, ok: status >= 200 && status < 300 })
+    expect(classifyGitHubResponse(response(401))).toBe('permanent')
+    expect(classifyGitHubResponse(response(403))).toBe('permanent')
+    expect(classifyGitHubResponse(response(404))).toBe('permanent')
+    expect(classifyGitHubResponse(response(404), { expectedStatuses: [404] })).toBe('expected')
+    for (const status of [408, 429, 500, 503]) expect(classifyGitHubResponse(response(status))).toBe('transient')
+    expect(classifyGitHubTransportError()).toBe('transient')
+    expect(permanentBlocker(new PilotError('github-transient-failure'))).toBeNull()
+    expect(permanentBlocker(new PilotError('github-permanent-failure'))).toBe('repository-state-conflict')
   })
   it('removes stale untracked and ignored files before another execution', () => {
     const { root } = repo(); fs.writeFileSync(path.join(root, '.gitignore'), 'ignored.tmp\n'); git(root, ['add', '--', '.gitignore']); git(root, ['commit', '-m', 'ignore'])

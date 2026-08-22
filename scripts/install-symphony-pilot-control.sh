@@ -11,7 +11,7 @@ fail() {
 
 source_root="$(/usr/bin/readlink -f -- "$1")"
 version=$2
-launcher_path=${3:-/usr/local/libexec/kaimono-baton-symphony-launcher}
+launcher_path=${3:-/opt/plain-relay/kaimono-baton-symphony-launcher}
 case "$version" in *[!A-Za-z0-9._-]*|'') fail invalid-version ;; esac
 case "$version" in .|..) fail invalid-version ;; esac
 destination="/opt/plain-relay/kaimono-baton-symphony-control/$version"
@@ -22,6 +22,7 @@ case "$launcher_path/" in "$destination/"*) fail launcher-inside-control-root ;;
 files='scripts/symphony-pilot-codex.sh
 scripts/symphony-pilot-host.mjs
 scripts/symphony-pilot-isolation-test.mjs
+scripts/symphony-pilot-owner-identity.sh
 scripts/symphony-pilot-trusted-launcher.sh
 scripts/verify-symphony-pilot-upstream.mjs
 symphony/WORKFLOW.md

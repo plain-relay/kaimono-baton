@@ -7,7 +7,9 @@ fail() {
 }
 
 [ "$(/usr/bin/uname -s)" = Linux ] || fail wsl-linux-required
-[ "${1:-}" = app-server ] && [ "$#" -eq 1 ] || fail invalid-codex-wrapper-mode
+[ "${1:-}" = app-server ] && [ "$#" -eq 2 ] || fail invalid-codex-wrapper-mode
+owner_process_identity=$2
+case "$owner_process_identity" in *[!0-9a-f]*|????????????????????????????????????????????????????????????????) ;; *) fail owner-process-identity-invalid ;; esac
 
 control_root="$(/usr/bin/readlink -f -- "${SYMPHONY_PILOT_CONTROL_ROOT:?SYMPHONY_PILOT_CONTROL_ROOT is required}")"
 workspace="$(/usr/bin/readlink -f -- "$PWD")"
@@ -64,7 +66,7 @@ trap 'stop_sandbox; exit 143' TERM
 
 set -- \
   --die-with-parent --new-session \
-  --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-net \
+  --unshare-user --unshare-pid --unshare-ipc --unshare-uts \
   --proc /proc --dev /dev --tmpfs /tmp \
   --dir /pilot-runtime \
   --ro-bind "$codex_bin" /pilot-runtime/codex \
@@ -115,7 +117,7 @@ fi
 
 # A one-use, host-only permit binds this launch to the claimed issue,
 # executionId, task hash, base SHA, owner UUID, and a 60-second lifetime.
-"$node_bin" "$host" consume-launch-permit
+"$node_bin" "$host" consume-launch-permit "$owner_process_identity"
 
 exec 3<&0
 "$bwrap_bin" "$@" /pilot-runtime/codex app-server <&3 3<&- &
