@@ -384,7 +384,6 @@ try {
     environments: localEnvironment,
     selectedCapabilityRoots: [],
     dynamicTools: [],
-    ephemeral: true,
   })
   if (thread?.activePermissionProfile?.id !== PROFILE) fail('active-permission-profile-mismatch')
   const exactThreadRuntimeWorkspaceRoots = hasExactRuntimeWorkspaceRoots(thread?.runtimeWorkspaceRoots)
