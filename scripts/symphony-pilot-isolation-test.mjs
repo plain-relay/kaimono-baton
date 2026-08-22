@@ -488,6 +488,7 @@ try {
           try {
             await runModelToolProbe(thread)
             await runModelEditTurn(thread)
+            modelEditSucceeded = true
           }
           catch (error) {
             modelEditSucceeded = false
