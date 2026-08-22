@@ -89,6 +89,7 @@ const child = spawn(launcher, ['codex', 'app-server'], {
   cwd: workspace,
   env: process.env,
   stdio: ['pipe', 'pipe', 'inherit'],
+  detached: true,
 })
 
 let buffer = ''
@@ -122,15 +123,24 @@ function rpc(method, params) {
   })
 }
 
-const cleanup = () => {
+function waitForChildExit(timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const exited = () => { clearTimeout(timer); resolve(true) }
+    const timer = setTimeout(() => { child.off('exit', exited); resolve(false) }, timeoutMs)
+    child.once('exit', exited)
+  })
+}
+
+const cleanup = async () => {
   try { child.stdin.end() } catch {}
-  try { child.kill('SIGTERM') } catch {}
-  const forceKill = setTimeout(() => {
-    if (child.exitCode === null) {
-      try { child.kill('SIGKILL') } catch {}
+  if (!(await waitForChildExit(5000))) {
+    try { process.kill(-child.pid, 'SIGTERM') } catch {}
+    if (!(await waitForChildExit(5000))) {
+      try { process.kill(-child.pid, 'SIGKILL') } catch {}
+      await waitForChildExit(1000)
     }
-  }, 1000)
-  forceKill.unref()
+  }
   for (const file of [homeCanary, codexCanary, outsideCanary, workspaceCanary, workspaceProbe, statePath, permitPath, `${permitPath}.consuming`]) {
     try { fs.unlinkSync(file) } catch {}
   }
@@ -187,5 +197,5 @@ try {
     console.log(`[symphony-pilot-isolation] PASS profile=${PROFILE} approval=granular-fail-closed pilot_home_injection=blocked control_write=blocked codex=0.147.0`)
   }
 } finally {
-  cleanup()
+  await cleanup()
 }
