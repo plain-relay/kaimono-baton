@@ -6,13 +6,55 @@ fail() {
   exit 1
 }
 
-[ "$(/usr/bin/id -u)" = 0 ] || fail root-required-run-explicitly
-[ "$#" -ge 3 ] && [ "$#" -le 4 ] || fail 'usage: install-symphony-pilot-control.sh SOURCE_ROOT VERSION_OR_SHA CLEAN_SYMPHONY_SOURCE_ROOT [LAUNCHER_PATH]'
+assert_root_immutable_ancestors() {
+  current=$1
+  while :; do
+    [ -d "$current" ] && [ ! -L "$current" ] || fail installer-source-ancestor-invalid
+    [ "$(/usr/bin/readlink -f -- "$current")" = "$current" ] || fail installer-source-ancestor-invalid
+    [ "$(/usr/bin/stat -c %u -- "$current")" = 0 ] || fail installer-source-owner-invalid
+    mode=$(/usr/bin/stat -c %a -- "$current")
+    [ "$((0$mode & 022))" -eq 0 ] || fail installer-source-writable
+    [ "$current" = / ] && return
+    current=$(/usr/bin/dirname -- "$current")
+  done
+}
 
-source_root="$(/usr/bin/readlink -f -- "$1")"
-version=$2
-symphony_source_root="$(/usr/bin/readlink -f -- "$3")"
-launcher_path=${4:-/opt/plain-relay/kaimono-baton-symphony-launcher}
+assert_root_immutable_tree() {
+  target=$1
+  assert_root_immutable_ancestors "$target"
+  if /usr/bin/find -P "$target" -xdev -type l -print -quit | /usr/bin/grep -q .; then fail installer-source-symlink; fi
+  if /usr/bin/find -P "$target" -xdev ! -type d ! -type f -print -quit | /usr/bin/grep -q .; then fail installer-source-file-type-invalid; fi
+  if /usr/bin/find -P "$target" -xdev ! -uid 0 -print -quit | /usr/bin/grep -q .; then fail installer-source-owner-invalid; fi
+  if /usr/bin/find -P "$target" -xdev -perm /022 -print -quit | /usr/bin/grep -q .; then fail installer-source-writable; fi
+}
+
+assert_trusted_runtime_file() {
+  target=$1
+  [ -f "$target" ] && [ ! -L "$target" ] || fail trusted-runtime-invalid
+  parent=$(/usr/bin/dirname -- "$target")
+  assert_root_immutable_ancestors "$parent"
+  [ "$(/usr/bin/stat -c %u -- "$target")" = 0 ] || fail trusted-runtime-invalid
+  mode=$(/usr/bin/stat -c %a -- "$target")
+  [ "$((0$mode & 022))" -eq 0 ] || fail trusted-runtime-invalid
+}
+
+[ "$(/usr/bin/id -u)" = 0 ] || fail root-required-run-explicitly
+[ "$#" -ge 4 ] && [ "$#" -le 5 ] || fail 'usage: install-symphony-pilot-control.sh ROOT_OWNED_SOURCE_ROOT SOURCE_COMMIT VERSION_OR_SHA CLEAN_SYMPHONY_SOURCE_ROOT [LAUNCHER_PATH]'
+
+case "$1" in /*) ;; *) fail installer-source-root-not-absolute ;; esac
+source_root=$(/usr/bin/readlink -f -- "$1")
+[ "$source_root" = "$1" ] || fail installer-source-root-not-canonical
+case "$0" in /*) ;; *) fail installer-self-path-mismatch ;; esac
+installer_path=$(/usr/bin/readlink -f -- "$0")
+[ "$installer_path" = "$0" ] || fail installer-self-path-mismatch
+[ "$installer_path" = "$source_root/scripts/install-symphony-pilot-control.sh" ] || fail installer-self-path-mismatch
+
+source_commit=$2
+version=$3
+symphony_source_root=$(/usr/bin/readlink -f -- "$4")
+launcher_path=${5:-/opt/plain-relay/kaimono-baton-symphony-launcher}
+case "$source_commit" in *[!0123456789abcdef]*|'') fail installer-source-commit-invalid ;; esac
+[ "${#source_commit}" -eq 40 ] || fail installer-source-commit-invalid
 case "$version" in *[!A-Za-z0-9._-]*|'') fail invalid-version ;; esac
 case "$version" in .|..) fail invalid-version ;; esac
 destination="/opt/plain-relay/kaimono-baton-symphony-control/$version"
@@ -23,16 +65,29 @@ symphony_destination=/opt/plain-relay/openai-symphony-8001b52e
 case "$launcher_path" in /*) ;; *) fail launcher-path-not-absolute ;; esac
 case "$launcher_path/" in "$destination/"*) fail launcher-inside-control-root ;; esac
 
-git_bin=${SYMPHONY_PILOT_GIT_BIN:-/opt/git-2.50.1/bin/git}
-git_exec_path=${SYMPHONY_PILOT_GIT_EXEC_PATH:-/opt/git-2.50.1/libexec/git-core}
-node_bin=${SYMPHONY_PILOT_NODE_BIN:-/usr/bin/node}
-npm_bin=${SYMPHONY_PILOT_NPM_BIN:-/usr/bin/npm}
-bwrap_bin=${SYMPHONY_PILOT_BWRAP_BIN:-/opt/bubblewrap-0.11.2/bin/bwrap}
-shell_bin=${SYMPHONY_PILOT_SHELL_BIN:-/bin/sh}
-for trusted in "$git_bin" "$node_bin" "$npm_bin" "$bwrap_bin" "$shell_bin"; do
-  [ -e "$trusted" ] || fail trusted-runtime-missing
+# This check runs before any project JavaScript is executed. The source checkout
+# and every member (including .git) must already be the root-owned staging tree.
+assert_root_immutable_tree "$source_root"
+
+git_bin=/opt/git-2.50.1/bin/git
+git_exec_path=/opt/git-2.50.1/libexec/git-core
+node_bin=$(/usr/bin/readlink -f -- /usr/bin/node)
+npm_bin=$(/usr/bin/readlink -f -- /usr/bin/npm)
+bwrap_bin=/opt/bubblewrap-0.11.2/bin/bwrap
+shell_bin=$(/usr/bin/readlink -f -- /bin/sh)
+[ -d "$git_exec_path" ] && [ ! -L "$git_exec_path" ] || fail trusted-git-runtime-invalid
+git_root=$(/usr/bin/dirname -- "$(/usr/bin/dirname -- "$git_bin")")
+[ "$git_bin" = "$git_root/bin/git" ] && [ "$git_exec_path" = "$git_root/libexec/git-core" ] || fail trusted-git-runtime-invalid
+assert_trusted_runtime_file "$git_bin"
+assert_root_immutable_ancestors "$git_exec_path"
+[ "$("$git_bin" --version)" = 'git version 2.50.1' ] || fail trusted-git-runtime-invalid
+[ "$("$git_bin" --exec-path)" = "$git_exec_path" ] || fail trusted-git-runtime-invalid
+for helper_name in git-remote-http git-remote-https; do
+  helper_path=$(/usr/bin/readlink -f -- "$git_exec_path/$helper_name")
+  case "$helper_path" in "$git_root"/*) ;; *) fail trusted-git-runtime-invalid ;; esac
+  assert_trusted_runtime_file "$helper_path"
 done
-[ -d "$git_exec_path" ] || fail trusted-runtime-missing
+for trusted in "$node_bin" "$npm_bin" "$bwrap_bin" "$shell_bin"; do assert_trusted_runtime_file "$trusted"; done
 
 install_tmp=$(/usr/bin/mktemp -d /var/tmp/kaimono-baton-symphony-install.XXXXXX)
 cleanup() {
@@ -45,7 +100,7 @@ trusted_git() {
   git_cwd=$1
   shift
   /usr/bin/env -i PATH="${git_bin%/*}:$git_exec_path:/usr/bin:/bin" HOME="$install_tmp/home" XDG_CONFIG_HOME="$install_tmp/xdg" \
-    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_EXEC_PATH="$git_exec_path" \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_EXEC_PATH="$git_exec_path" GIT_NO_REPLACE_OBJECTS=1 \
     GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$install_tmp/hooks" \
     GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1= \
     GIT_CONFIG_KEY_2=core.fsmonitor GIT_CONFIG_VALUE_2=false \
@@ -53,6 +108,14 @@ trusted_git() {
     GIT_CONFIG_KEY_4=safe.directory GIT_CONFIG_VALUE_4="$git_cwd" \
     "$git_bin" -C "$git_cwd" "$@"
 }
+
+# The testable verifier repeats the path/ownership checks and proves HEAD, tree,
+# repository URL, source cleanliness, config, object-store, replacement refs, and
+# every copied control blob against SOURCE_COMMIT before any control file is copied.
+/usr/bin/env -i PATH="${node_bin%/*}:${git_bin%/*}:$git_exec_path:/usr/bin:/bin" \
+  "$node_bin" "$source_root/scripts/symphony-pilot-install-source.mjs" \
+  "$source_root" "$source_commit" "$installer_path" "$git_bin" "$git_exec_path" \
+  "$install_tmp/home" "$install_tmp/xdg" "$install_tmp/hooks"
 
 [ "$(trusted_git "$symphony_source_root" rev-parse --verify HEAD)" = "$symphony_sha" ] || fail symphony-source-base-invalid
 [ -z "$(trusted_git "$symphony_source_root" status --porcelain=v1 --untracked-files=all --ignored=matching)" ] || fail symphony-source-not-clean
@@ -105,6 +168,7 @@ trusted_git "$symphony_destination" apply "$destination/symphony/patches/0001-di
   SYMPHONY_PILOT_NPM_BIN="$npm_bin" \
   SYMPHONY_PILOT_BWRAP_BIN="$bwrap_bin" \
   SYMPHONY_PILOT_SHELL_BIN="$shell_bin" \
+  GIT_NO_REPLACE_OBJECTS=1 \
   "$node_bin" "$destination/scripts/symphony-pilot-host.mjs" verify-symphony-runtime-only
 
 printf '%s\n' "installed immutable pilot control root: $destination"

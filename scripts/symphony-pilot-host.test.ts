@@ -7,11 +7,11 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import {
-  CONTROL_MANIFEST_FILES, PilotError, PILOT, acquireExecutionLock, assertSafeLocalGitConfig, buildValidatedTree, captureAgentGitState, classifyGitHubResponse, classifyGitHubTransportError, collectChangedPaths,
+  CONTROL_MANIFEST_FILES, PilotError, PILOT, acquireExecutionLock, acquireFinalizationLease, assertFinalizationLeaseLive, assertSafeLocalGitConfig, buildValidatedTree, captureAgentGitState, classifyGitHubResponse, classifyGitHubTransportError, collectChangedPaths,
   consumeLaunchPermit,
   extractAndValidateApproval, extractAndValidateSafeTask, hasTrustedApproval,
   isPathAllowed, isProtectedPath, parseLsTreeRecord, permanentBlocker, persistPermanentPrepareFailure, privilegedGit, privilegedGitEnv, readSafeJson,
-  runIfExecutionOwner, taskHash, validateAgentGitState, validateHandoff, validateIssueSnapshot, validateLaunchPermit,
+  finalizationLeaseHolderIsLive, releaseFinalizationLease, runIfExecutionOwner, taskHash, validateAgentGitState, validateHandoff, validateIssueSnapshot, validateLaunchPermit,
   validatePilotAuthStore, validateRecoveryObject, validateReferencePathAtBase, validateRepoPath, validateSafeTask,
   validateTrustedGitRuntime, validateTrustedPathSeparation, verifyControlManifest, verifySymphonyRuntime,
 } from './symphony-pilot-host.mjs'
@@ -387,6 +387,19 @@ describe('exact immutable Symphony runtime', () => {
     git(head.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'wrong-head'])
     expect(() => verifySymphonyRuntime(head.root, head.controlManifest, { requireRootOwner: false, expectedBaseSha: head.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
   }, 20_000)
+  it('rejects loose and packed replacement refs before reconstructing the pinned base', () => {
+    const loose = symphonyFixture()
+    const replacement = git(loose.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit-tree', `${loose.identity.symphonyBaseSha}^{tree}`, '-p', loose.identity.symphonyBaseSha, '-m', 'replacement'])
+    git(loose.root, ['update-ref', `refs/replace/${loose.identity.symphonyBaseSha}`, replacement])
+    expect(() => verifySymphonyRuntime(loose.root, loose.controlManifest, { requireRootOwner: false, expectedBaseSha: loose.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+
+    const packed = symphonyFixture()
+    const packedReplacement = git(packed.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit-tree', `${packed.identity.symphonyBaseSha}^{tree}`, '-p', packed.identity.symphonyBaseSha, '-m', 'replacement'])
+    git(packed.root, ['update-ref', `refs/replace/${packed.identity.symphonyBaseSha}`, packedReplacement])
+    git(packed.root, ['pack-refs', '--all', '--prune'], { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' })
+    expect(fs.existsSync(path.join(packed.root, '.git', 'refs', 'replace', packed.identity.symphonyBaseSha))).toBe(false)
+    expect(() => verifySymphonyRuntime(packed.root, packed.controlManifest, { requireRootOwner: false, expectedBaseSha: packed.identity.symphonyBaseSha })).toThrow(SYMPHONY_RUNTIME_ERROR)
+  }, 20_000)
   it.runIf(process.platform === 'linux')('rejects writable runtime and .git members', () => {
     const runtime = symphonyFixture()
     fs.chmodSync(path.join(runtime.root, 'elixir/lib/symphony_elixir/codex/app_server.ex'), 0o666)
@@ -424,6 +437,45 @@ describe('atomic execution and exact tree', () => {
     expect(await run(ownerA, identityA)).toBe(0); expect(fs.readFileSync(marker, 'utf8')).toBe(ownerA)
     expect(runIfExecutionOwner({ ownerInstanceId: ownerA, ownerProcessIdentity: identityA }, ownerA, identityB, () => { throw new Error('must not execute') }).status).toBe('non-owner')
   })
+  it.runIf(process.platform === 'linux')('serializes same-owner finalizers before handoff, commit, push, or PR work', async () => {
+    const root = temp('same-owner-finalization'); const marker = path.join(root, 'critical-section'); const url = pathToFileURL(path.resolve('scripts/symphony-pilot-host.mjs')).href
+    const owner = '11111111-1111-4111-8111-111111111111'; const identity = 'a'.repeat(64)
+    const code = `import fs from 'node:fs';import {acquireFinalizationLease,releaseFinalizationLease} from ${JSON.stringify(url)};try{const lease=await acquireFinalizationLease(process.argv[1],{issueNumber:6,executionId:9,ownerInstanceId:${JSON.stringify(owner)},ownerProcessIdentity:${JSON.stringify(identity)}});for(const step of ['handoff-inspected','commit-created','push-started','pr-write-started'])fs.appendFileSync(process.argv[2],step+'\\n');await new Promise((resolve)=>setTimeout(resolve,300));await releaseFinalizationLease(lease)}catch(error){if(error?.code==='finalization-lease-held')process.exit(23);throw error}`
+    const run = () => new Promise<number>((resolve) => { const child = spawn(process.execPath, ['--input-type=module', '-e', code, root, marker]); child.on('exit', (status) => resolve(status ?? 99)) })
+    expect((await Promise.all([run(), run()])).sort((a, b) => a - b)).toEqual([0, 23])
+    expect(fs.readFileSync(marker, 'utf8').trim().split(/\r?\n/)).toEqual(['handoff-inspected', 'commit-created', 'push-started', 'pr-write-started'])
+  }, 20_000)
+  it.runIf(process.platform === 'linux')('rejects a live finalization-lease competitor and safely recovers a dead holder without changing durable state', async () => {
+    const root = temp('finalization-lease-recovery'); const owner = '11111111-1111-4111-8111-111111111111'; const identity = 'a'.repeat(64)
+    const args = { issueNumber: 6, executionId: 9, ownerInstanceId: owner, ownerProcessIdentity: identity }
+    const live = await acquireFinalizationLease(root, args)
+    assertFinalizationLeaseLive(live); expect(finalizationLeaseHolderIsLive(live.record)).toBe(true)
+    await expect(acquireFinalizationLease(root, args)).rejects.toMatchObject({ code: 'finalization-lease-held' })
+    await releaseFinalizationLease(live)
+
+    const durableState = { state: 'finalizing', treeSha: 'a'.repeat(40), commitSha: 'b'.repeat(40), issueNumber: 6, executionId: 9 }
+    const stateFile = path.join(root, 'GH-6.json'); fs.writeFileSync(stateFile, `${JSON.stringify(durableState)}\n`)
+    const ready = path.join(root, 'holder-ready'); const url = pathToFileURL(path.resolve('scripts/symphony-pilot-host.mjs')).href
+    const code = `import fs from 'node:fs';import {acquireFinalizationLease} from ${JSON.stringify(url)};const lease=await acquireFinalizationLease(process.argv[1],${JSON.stringify(args)});fs.writeFileSync(process.argv[2],'ready');setInterval(()=>{},1000)`
+    const holder = spawn(process.execPath, ['--input-type=module', '-e', code, root, ready])
+    await new Promise<void>((resolve, reject) => {
+      const timer = setInterval(() => { if (fs.existsSync(ready)) { clearInterval(timer); resolve() } }, 20)
+      holder.once('exit', (status) => { clearInterval(timer); reject(new Error(`holder-exited-${status}`)) })
+    })
+    holder.kill('SIGKILL')
+    await new Promise<void>((resolve) => holder.once('exit', () => resolve()))
+    let recovered: any
+    for (let attempt = 0; attempt < 20 && !recovered; attempt += 1) {
+      try { recovered = await acquireFinalizationLease(root, args) }
+      catch (error: any) {
+        if (error?.code !== 'finalization-lease-held') throw error
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+    }
+    expect(recovered).toBeTruthy(); assertFinalizationLeaseLive(recovered)
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual(durableState)
+    await releaseFinalizationLease(recovered)
+  }, 20_000)
   it.runIf(process.platform === 'linux')('derives distinct owner process identities for two live processes with the same UUID', async () => {
     const helper = path.resolve('scripts/symphony-pilot-owner-identity.sh')
     const instanceId = '11111111-1111-4111-8111-111111111111'
@@ -576,6 +628,7 @@ describe('privileged Git boundary', () => {
       expect(env.PATH?.split(path.delimiter)).not.toContain(attack)
       expect(env.GIT_EXEC_PATH).toBe(fs.realpathSync(process.env.SYMPHONY_PILOT_GIT_EXEC_PATH!))
       expect(env.GIT_CONFIG_NOSYSTEM).toBe('1')
+      expect(env.GIT_NO_REPLACE_OBJECTS).toBe('1')
       expect(fs.existsSync(marker)).toBe(false)
     } finally { process.env.PATH = originalPath }
   })

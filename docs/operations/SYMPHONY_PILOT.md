@@ -107,11 +107,54 @@ policy through app-server `config/read` before starting a thread.
 
 ## Required local setup
 
-The runtime control plane and Symphony source are installed artifacts, not the Issue workspace or editable service-account checkouts. Use two disposable checkouts: an exact patched checkout for the required tests/build evidence, and a second fresh, complete, clean checkout at the pinned Symphony SHA as the installer input. Do not use a partial/promisor clone. From an independently reviewed exact pilot head, an operator explicitly installs the versioned control root and immutable Symphony source; unattended runtime never downloads, updates, invokes `sudo`, or self-installs:
+The runtime control plane and Symphony source are installed artifacts, not the Issue workspace or editable service-account checkouts. Use two disposable checkouts: an exact patched checkout for the required tests/build evidence, and a second fresh, complete, clean checkout at the pinned Symphony SHA as the installer input. Do not use a partial/promisor clone.
+
+The installer must never be invoked from a normal developer or Codex checkout. Before any project code runs as root, create a fresh root-owned source snapshot directly from the fixed public repository and the exact final reviewed commit. `SOURCE_COMMIT` is a full lowercase 40-hex commit SHA selected by the operator after the remediation is committed and pushed; it is neither a branch/tag name nor a value embedded in the installer.
 
 ```sh
-sudo ./scripts/install-symphony-pilot-control.sh "$PWD" '<reviewed-version-or-sha>' /path/to/fresh-clean-openai-symphony
+SOURCE_COMMIT='<exact-final-reviewed-40-hex-sha>'
+STAGING_PARENT=/opt/plain-relay/kaimono-baton-pilot-staging
+GIT_BIN=/opt/git-2.50.1/bin/git
+GIT_EXEC_PATH=/opt/git-2.50.1/libexec/git-core
+
+test "$($GIT_BIN --version)" = 'git version 2.50.1'
+test "$($GIT_BIN --exec-path)" = "$GIT_EXEC_PATH"
+test -x "$GIT_EXEC_PATH/git-remote-http" -a -x "$GIT_EXEC_PATH/git-remote-https"
+sudo /usr/bin/install -d -o root -g root -m 0700 "$STAGING_PARENT" "$STAGING_PARENT/empty-git-template"
+STAGING_ROOT="$(sudo /usr/bin/mktemp -d "$STAGING_PARENT/source.XXXXXX")"
+sudo /usr/bin/chown root:root "$STAGING_ROOT"
+sudo /usr/bin/chmod 0700 "$STAGING_ROOT"
+
+trusted_stage_git() {
+  sudo /usr/bin/env -i \
+    PATH="/opt/git-2.50.1/bin:$GIT_EXEC_PATH:/usr/bin:/bin" \
+    HOME="$STAGING_PARENT/git-home" XDG_CONFIG_HOME="$STAGING_PARENT/git-xdg" \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_EXEC_PATH="$GIT_EXEC_PATH" \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$STAGING_PARENT/empty-hooks" \
+    GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1= \
+    GIT_CONFIG_KEY_2=core.fsmonitor GIT_CONFIG_VALUE_2=false \
+    GIT_CONFIG_KEY_3=protocol.file.allow GIT_CONFIG_VALUE_3=never \
+    "$GIT_BIN" -C "$STAGING_ROOT" "$@"
+}
+
+sudo /usr/bin/install -d -o root -g root -m 0700 "$STAGING_PARENT/git-home" "$STAGING_PARENT/git-xdg" "$STAGING_PARENT/empty-hooks"
+trusted_stage_git init --template="$STAGING_PARENT/empty-git-template"
+trusted_stage_git remote add origin https://github.com/plain-relay/kaimono-baton.git
+trusted_stage_git fetch --no-tags --depth=1 origin "$SOURCE_COMMIT"
+trusted_stage_git checkout --detach --force FETCH_HEAD
+test "$(trusted_stage_git rev-parse --verify HEAD)" = "$SOURCE_COMMIT"
+test "$(trusted_stage_git rev-parse --verify "${SOURCE_COMMIT}^{tree}")" = "$(trusted_stage_git rev-parse HEAD^{tree})"
+test -z "$(trusted_stage_git status --porcelain=v1 --untracked-files=all --ignored=matching)"
+sudo /usr/bin/chown -R root:root "$STAGING_ROOT"
+sudo /usr/bin/chmod -R go-w "$STAGING_ROOT"
+sudo /usr/bin/chmod 0700 "$STAGING_ROOT"
+
+sudo "$STAGING_ROOT/scripts/install-symphony-pilot-control.sh" \
+  "$STAGING_ROOT" "$SOURCE_COMMIT" "$SOURCE_COMMIT" /path/to/fresh-clean-openai-symphony
 ```
+
+All staging commands before the final installer invocation use only the pinned Git binary and system utilities; they do not run `npm`, Node, tests, hooks, or any project executable. The installer self-binds its canonical `$0` to `SOURCE_ROOT/scripts/install-symphony-pilot-control.sh`, requires root ownership and no group/other-writable or symlink path through the staged source and `.git`, rejects unsafe local Git configuration, alternates, and both loose and packed replacement refs, and verifies every copied control file against the blob at `SOURCE_COMMIT`. It refuses a mismatched HEAD/tree, tracked or untracked/ignored source change, or a caller-selected mutable checkout before copying or executing control code.
 
 The installer refuses a non-root invocation, a non-clean or wrong-HEAD Symphony input, and existing destinations. It copies only the enumerated pilot artifacts to `/opt/plain-relay/kaimono-baton-symphony-control/<version-or-sha>/`, creates a SHA-256 manifest there, and installs a byte-identical launcher at `/opt/plain-relay/kaimono-baton-symphony-launcher`. It then copies the clean pinned Symphony input to `/opt/plain-relay/openai-symphony-8001b52e`, applies only the manifest-attested pilot patch, makes the complete source and `.git` root-owned and non-group/non-other-writable, and runs the exact runtime verifier before reporting success.
 
@@ -221,6 +264,8 @@ preparing -> claimed -> finalizing -> completed
 - `completed`: Draft PR handoff is durable; label cleanup may be retried.
 - `blocked`: a larger `executionId` and new exact approval are required.
 
+Before any finalizer inspects the handoff, a durable lease keyed by `(issueNumber, executionId)` is acquired beneath the trusted state root. The lease is a kernel-held advisory lock with a root-validated `flock` runtime, rather than an age-based directory deletion: a live competing same-owner finalizer exits as `finalization-lease-held` without inspecting the workspace, changing state, committing, pushing, writing a PR, or removing a label. Its record contains the owner tuple plus boot ID, PID, process-start time, and nonce for audit, but stale recovery relies on kernel lock release on process death rather than trusting a reusable PID. A crashed `finalizing` invocation therefore permits exactly one later same-owner recovery to revalidate its already persisted tree/commit identity; it cannot create a second commit.
+
 Transient unauthenticated GitHub read/API failures and temporary remote transport failures are not converted into permanent task rejection. Deterministic task/approval/base/pin/path/workspace/configuration/tooling failures occur under the issue coordination lock and are persisted with enumerated blocker codes. If a bootstrap control check fails before the host can safely execute, the immutable launcher best-effort records an execution-0 generic blocked state only after the private state/workspace roots and owner UUID are valid; it never executes a failed-attestation host. A blocked execution ID cannot dispatch again; a larger exact execution ID and approval are required. Raw provider/system errors are not copied into Issue comments, PR bodies, handoff, or AI task data.
 
 A stale lock is never removed automatically. An operator must verify the owning process is gone and reconcile state. An interrupted `preparing` or `claimed` state can be explicitly quarantined with:
@@ -248,7 +293,7 @@ The agent-controlled index is never used to create the commit. The trusted final
 7. updates only the deterministic local branch ref;
 8. pushes the exact persisted SHA to `refs/heads/codex/gh-<issue>`.
 
-All privileged Git commands invoke the pinned official Git 2.50.1 binary at the configured absolute path. Before either Host Guard launch or credentialed Finalizer Git, the host requires the exact version, requires the binary's unmodified `git --exec-path` to equal the configured canonical `/opt/git-2.50.1/libexec/git-core`, and requires root-owned, non-group/other-writable in-tree `git-remote-http` and `git-remote-https` helpers. A missing, redirected, writable, or PATH-substituted helper fails closed as `trusted-git-runtime-invalid` before Codex runs or credentials are introduced. The host then uses that fixed root-owned `GIT_EXEC_PATH` and minimal trusted `PATH`, with sanitized HOME/XDG, `GIT_CONFIG_NOSYSTEM=1`, no global config, an empty trusted `core.hooksPath` outside the workspace, no credential helper, and a literal validated HTTPS destination. It rejects unexpected local Git configuration, including helpers, URL rewrites, filters, SSH commands, and hook paths, before it constructs the Authorization value. Repository/system/global pre-push and reference-transaction hooks, aliases, remote helpers, and workspace executables cannot change privileged semantics. `--no-verify` is not used.
+All privileged Git commands invoke the pinned official Git 2.50.1 binary at the configured absolute path. Before either Host Guard launch or credentialed Finalizer Git, the host requires the exact version, requires the binary's unmodified `git --exec-path` to equal the configured canonical `/opt/git-2.50.1/libexec/git-core`, and requires root-owned, non-group/other-writable in-tree `git-remote-http` and `git-remote-https` helpers. A missing, redirected, writable, or PATH-substituted helper fails closed as `trusted-git-runtime-invalid` before Codex runs or credentials are introduced. The host then uses that fixed root-owned `GIT_EXEC_PATH` and minimal trusted `PATH`, with sanitized HOME/XDG, `GIT_CONFIG_NOSYSTEM=1`, `GIT_NO_REPLACE_OBJECTS=1`, no global config, an empty trusted `core.hooksPath` outside the workspace, no credential helper, and a literal validated HTTPS destination. The Symphony verifier also rejects every `refs/replace/` entry, including packed refs, before reconstructing either tree. It rejects unexpected local Git configuration, including helpers, URL rewrites, filters, SSH commands, and hook paths, before it constructs the Authorization value. Repository/system/global pre-push and reference-transaction hooks, aliases, remote helpers, and workspace executables cannot change privileged semantics. `--no-verify` is not used.
 
 No npm, test, build, package script, agent executable, or repository hook runs after the finalizer introduces credentials. After push, the host performs only GitHub API handoff, persists `completed`, and removes `codex-ready` best-effort. The PR is always Draft and targets `main`.
 

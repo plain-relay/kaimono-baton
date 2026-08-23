@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 export const PILOT = Object.freeze({
@@ -348,6 +348,11 @@ function assertImmutableSymphonyFilesystem(root, { requireRootOwner }) {
   assert(!fs.existsSync(path.join(gitDir, 'objects', 'info', 'alternates')), SYMPHONY_RUNTIME_ERROR)
 }
 
+function assertNoSymphonyReplacementRefs(root, gitEnv) {
+  const refs = privilegedGit(root, ['for-each-ref', '--format=%(refname)', 'refs/replace/'], gitEnv)
+  assert(refs === '', SYMPHONY_RUNTIME_ERROR)
+}
+
 function withSymphonyGitScratch(root, baseEnv, action) {
   const parent = path.join(stateRoot(), 'symphony-runtime-tmp')
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 })
@@ -423,6 +428,7 @@ export function verifySymphonyRuntime(rootPath, controlManifest, { requireRootOw
       GIT_CONFIG_VALUE_4: root,
     }
     assertSafeLocalGitConfig(root, gitEnv)
+    assertNoSymphonyReplacementRefs(root, gitEnv)
     assert(privilegedGit(root, ['rev-parse', '--verify', 'HEAD'], gitEnv) === identity.symphonyBaseSha, SYMPHONY_RUNTIME_ERROR)
     assert(privilegedGit(root, ['diff', '--cached', '--name-only', '--no-renames', '-z', identity.symphonyBaseSha], gitEnv) === '', SYMPHONY_RUNTIME_ERROR)
     assert(privilegedGit(root, ['ls-files', '--others', '--exclude-standard', '-z'], gitEnv) === '', SYMPHONY_RUNTIME_ERROR)
@@ -669,6 +675,129 @@ export function runIfExecutionOwner(state, ownerInstanceId, ownerProcessIdentity
   return { status: 'owner', value: action() }
 }
 
+function finalizationLeasePath(root, issueNumber, executionId) {
+  return path.join(root, 'finalization-leases', `GH-${issueNumber}-${executionId}.lock`)
+}
+
+function linuxProcessEvidence(pid = process.pid) {
+  assert(process.platform === 'linux' && Number.isSafeInteger(pid) && pid > 1, 'finalization-lease-runtime-invalid')
+  try {
+    const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+    const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').trim()
+    const close = raw.lastIndexOf(')')
+    assert(close >= 0, 'finalization-lease-runtime-invalid')
+    const fields = raw.slice(close + 2).split(/\s+/)
+    const processStartTime = fields[19]
+    assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(bootId) && /^\d+$/.test(processStartTime), 'finalization-lease-runtime-invalid')
+    return { bootId, pid, processStartTime }
+  } catch (error) {
+    if (error instanceof PilotError) throw error
+    throw new PilotError('finalization-lease-runtime-invalid')
+  }
+}
+
+function trustedFinalizationLeaseRuntime() {
+  assert(process.platform === 'linux', 'finalization-lease-runtime-invalid')
+  try {
+    const runtime = Object.fromEntries(Object.entries({ flock: '/usr/bin/flock', shell: '/bin/sh', cat: '/bin/cat' }).map(([name, configured]) => {
+      const resolved = fs.realpathSync(configured)
+      assertPosixTrusted(resolved, { rootOwned: true })
+      assert((fs.statSync(resolved).mode & 0o111) !== 0, 'finalization-lease-runtime-invalid')
+      return [name, resolved]
+    }))
+    return runtime
+  } catch (error) {
+    if (error instanceof PilotError) throw error
+    throw new PilotError('finalization-lease-runtime-invalid')
+  }
+}
+
+export function finalizationLeaseHolderIsLive(record) {
+  try {
+    assert(record && typeof record === 'object', 'finalization-lease-record-invalid')
+    assert(typeof record.finalizerBootId === 'string' && Number.isSafeInteger(record.finalizerPid) && typeof record.finalizerProcessStartTime === 'string', 'finalization-lease-record-invalid')
+    const current = linuxProcessEvidence(record.finalizerPid)
+    return current.bootId === record.finalizerBootId && current.processStartTime === record.finalizerProcessStartTime
+  } catch { return false }
+}
+
+export async function acquireFinalizationLease(root, { issueNumber, executionId, ownerInstanceId, ownerProcessIdentity }) {
+  assert(Number.isSafeInteger(issueNumber) && issueNumber > 0 && Number.isSafeInteger(executionId) && executionId > 0, 'finalization-lease-invalid')
+  assert(INSTANCE_ID.test(ownerInstanceId) && SHA64.test(ownerProcessIdentity), 'finalization-lease-invalid')
+  const runtime = trustedFinalizationLeaseRuntime()
+  const durableRoot = path.resolve(root)
+  fs.mkdirSync(durableRoot, { recursive: true, mode: 0o700 })
+  assertPosixTrusted(durableRoot, { directory: true })
+  const leasePath = finalizationLeasePath(durableRoot, issueNumber, executionId)
+  const leaseDirectory = path.dirname(leasePath)
+  fs.mkdirSync(leaseDirectory, { recursive: true, mode: 0o700 })
+  assertPosixTrusted(leaseDirectory, { directory: true })
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0)
+  const fd = fs.openSync(leasePath, flags, 0o600)
+  try { assert(fs.fstatSync(fd).isFile(), 'finalization-lease-invalid') } finally { fs.closeSync(fd) }
+
+  const finalizer = linuxProcessEvidence()
+  const recordPath = `${leasePath}.json`
+  const record = {
+    schemaVersion: 1, issueNumber, executionId, ownerInstanceId, ownerProcessIdentity,
+    finalizerBootId: finalizer.bootId, finalizerPid: finalizer.pid, finalizerProcessStartTime: finalizer.processStartTime,
+    nonce: crypto.randomBytes(24).toString('hex'), acquiredAt: new Date().toISOString(),
+  }
+  return await new Promise((resolve, reject) => {
+    let settled = false
+    const child = spawn(runtime.flock, ['-n', '-E', '75', '--', leasePath, runtime.shell, '-c', `printf '%s\\n' finalization-lease-ready; exec ${JSON.stringify(runtime.cat)} >/dev/null`], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+    })
+    const failLease = (error) => {
+      if (settled) return
+      settled = true
+      reject(error instanceof PilotError ? error : new PilotError('finalization-lease-runtime-invalid'))
+    }
+    child.once('error', () => failLease(new PilotError('finalization-lease-runtime-invalid')))
+    child.once('exit', (code) => {
+      if (!settled) {
+        failLease(new PilotError(code === 75 ? 'finalization-lease-held' : 'finalization-lease-runtime-invalid'))
+      }
+    })
+    child.stdout.on('data', (chunk) => {
+      if (settled || String(chunk) !== 'finalization-lease-ready\n') return
+      try {
+        durableWriteJson(recordPath, record)
+        const lease = { child, leasePath, recordPath, record, released: false, releasing: false, unexpectedExit: false }
+        child.once('exit', () => { if (!lease.releasing) lease.unexpectedExit = true })
+        settled = true
+        resolve(lease)
+      } catch (error) {
+        child.stdin.end()
+        failLease(error)
+      }
+    })
+  })
+}
+
+export function assertFinalizationLeaseLive(lease) {
+  assert(lease && lease.released === false && lease.unexpectedExit === false, 'finalization-lease-lost')
+}
+
+export async function releaseFinalizationLease(lease) {
+  assert(lease && lease.released === false, 'finalization-lease-invalid')
+  assertFinalizationLeaseLive(lease)
+  lease.releasing = true
+  // Delete the record while the advisory lock remains held. A newly acquired
+  // successor therefore cannot have its record removed by this finalizer.
+  if (fs.existsSync(lease.recordPath)) {
+    const stat = fs.lstatSync(lease.recordPath)
+    assert(stat.isFile() && !stat.isSymbolicLink(), 'finalization-lease-record-invalid')
+    fs.unlinkSync(lease.recordPath)
+  }
+  await new Promise((resolve, reject) => {
+    lease.child.once('exit', (code) => code === 0 ? resolve() : reject(new PilotError('finalization-lease-runtime-invalid')))
+    lease.child.stdin.end()
+  })
+  lease.released = true
+}
+
 function childEnv(extra = {}) {
   const runtime = trustedRuntimePaths()
   const hostTemp = path.join(stateRoot(), 'host-tmp')
@@ -791,6 +920,7 @@ export function privilegedGitEnv(extra = {}) {
     GIT_CONFIG_KEY_3: 'protocol.file.allow',
     GIT_CONFIG_VALUE_3: 'never',
     ...extra,
+    GIT_NO_REPLACE_OBJECTS: '1',
   })
 }
 
@@ -966,6 +1096,7 @@ function verifyRuntimePins(cwd) {
   const authHome = fs.realpathSync(configuredAuthHome)
   const runtime = trustedRuntimePaths()
   validateTrustedGitRuntime({ git: runtime.git, gitExecPath: runtime.gitExecPath })
+  trustedFinalizationLeaseRuntime()
   assertPosixTrusted(workspaceRoot, { directory: true })
   assertPosixTrusted(durableState, { directory: true })
   assert(process.getuid() !== 0, 'pilot-service-root-forbidden')
@@ -1265,18 +1396,35 @@ async function finalize(cwd) {
     console.log(`[symphony-pilot] non-owner-finalize-noop GH-${issueNumber}`)
     return
   }
-  verifyRuntimePins(cwd)
-  if (state.state === 'completed') { await removeLabel(issueNumber); return }
-  if (state.state === 'finalizing') {
-    // Recovery trusts only the already validated and durably persisted object identity.
-    validateRecoveryObject(cwd, state)
-    pushPersistedCommit(cwd, state)
-    const prNumber = await createDraftPr(issueNumber, state)
-    writeState(issueNumber, { ...state, state: 'completed', prNumber })
-    try { await removeLabel(issueNumber) } catch {}
-    return
-  }
+  let lease
   try {
+    try {
+      lease = await acquireFinalizationLease(stateRoot(), {
+        issueNumber, executionId: state.executionId, ownerInstanceId, ownerProcessIdentity,
+      })
+    } catch (error) {
+      if (error instanceof PilotError && error.code === 'finalization-lease-held') {
+        console.log(`[symphony-pilot] finalization-lease-held GH-${issueNumber}`)
+        return
+      }
+      throw error
+    }
+    assertFinalizationLeaseLive(lease)
+    verifyRuntimePins(cwd)
+    assertFinalizationLeaseLive(lease)
+    if (state.state === 'completed') { await removeLabel(issueNumber); return }
+    if (state.state === 'finalizing') {
+      // Recovery trusts only the already validated and durably persisted object identity.
+      validateRecoveryObject(cwd, state)
+      assertFinalizationLeaseLive(lease)
+      pushPersistedCommit(cwd, state)
+      assertFinalizationLeaseLive(lease)
+      const prNumber = await createDraftPr(issueNumber, state)
+      assertFinalizationLeaseLive(lease)
+      writeState(issueNumber, { ...state, state: 'completed', prNumber })
+      try { await removeLabel(issueNumber) } catch {}
+      return
+    }
     const prepared = validatePrepared(readSafeJson(cwd, '.symphony/task.json'))
     assert(prepared.executionId === state.executionId && taskHash(prepared.task) === state.taskHash, 'safe-task-integrity-failed')
     let handoff
@@ -1289,6 +1437,7 @@ async function finalize(cwd) {
     }
     if (state.state === 'claimed') {
       validateAgentGitState(cwd, prepared, state)
+      assertFinalizationLeaseLive(lease)
       const changedPaths = collectChangedPaths(cwd, prepared.baseSha)
       assert(changedPaths.length > 0, 'no-implementation-change')
       const treeSha = buildValidatedTree(cwd, prepared.baseSha, changedPaths, prepared.task.scopePaths, prepared.task.changeMode)
@@ -1299,9 +1448,12 @@ async function finalize(cwd) {
     }
     assert(state.state === 'finalizing', 'finalization-state-invalid')
     validateRecoveryObject(cwd, state)
+    assertFinalizationLeaseLive(lease)
     // Credentialed phase begins here. No repository/application/test command follows.
     pushPersistedCommit(cwd, state)
+    assertFinalizationLeaseLive(lease)
     const prNumber = await createDraftPr(issueNumber, state)
+    assertFinalizationLeaseLive(lease)
     state = { ...state, state: 'completed', prNumber }
     writeState(issueNumber, state)
     try { await removeLabel(issueNumber) } catch {}
@@ -1318,6 +1470,8 @@ async function finalize(cwd) {
     }
     // finalizing retains its exact durable object identity for host-only recovery.
     throw error
+  } finally {
+    if (lease && !lease.released && !lease.unexpectedExit) await releaseFinalizationLease(lease)
   }
 }
 
