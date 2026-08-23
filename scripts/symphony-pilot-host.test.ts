@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import {
   CONTROL_MANIFEST_FILES, PilotError, PILOT, acquireExecutionLock, acquireFinalizationLease, assertFinalizationLeaseLive, assertSafeLocalGitConfig, buildValidatedTree, captureAgentGitState, classifyGitHubResponse, classifyGitHubTransportError, collectChangedPaths,
   consumeLaunchPermit,
+  createCommitObject, createDraftPr, deterministicClaimedGitTimestamp, expectedDraftPr,
   extractAndValidateApproval, extractAndValidateSafeTask, hasTrustedApproval,
   isPathAllowed, isProtectedPath, parseLsTreeRecord, permanentBlocker, persistPermanentPrepareFailure, privilegedGit, privilegedGitEnv, readSafeJson,
   finalizationLeaseHolderIsLive, releaseFinalizationLease, runIfExecutionOwner, taskHash, validateAgentGitState, validateHandoff, validateIssueSnapshot, validateLaunchPermit,
@@ -491,6 +492,17 @@ describe('atomic execution and exact tree', () => {
     expect(identityA).not.toBe(identityB)
     expect(runIfExecutionOwner({ ownerInstanceId: instanceId, ownerProcessIdentity: identityA }, instanceId, identityB, () => { throw new Error('loser-executed') }).status).toBe('non-owner')
   })
+  it.runIf(process.platform === 'linux')('uses the real shell field 20 identity that the Node host verifies for the same launcher process', () => {
+    const helper = path.resolve('scripts/symphony-pilot-owner-identity.sh')
+    const hostUrl = pathToFileURL(path.resolve('scripts/symphony-pilot-host.mjs')).href
+    const instanceId = '11111111-1111-4111-8111-111111111111'
+    const nodeCode = `import {currentOwnerProcessIdentity} from ${JSON.stringify(hostUrl)};const shellIdentity=process.argv[2];const nodeIdentity=currentOwnerProcessIdentity(process.argv[1],shellIdentity);process.stdout.write(shellIdentity+'\\n'+nodeIdentity)`
+    // This is the production topology: the shell derives an identity from its
+    // parent and execs Node, so Node has that same parent/process chain.
+    const [shellIdentity, nodeIdentity] = execFileSync('/bin/sh', ['-c', 'set -eu;. "$1"; identity="$(symphony_pilot_owner_process_identity "$2" "$PPID")"; exec "$3" --input-type=module -e "$4" "$2" "$identity"', 'sh', helper, instanceId, process.execPath, nodeCode], { encoding: 'utf8' }).trim().split(/\r?\n/)
+    expect(shellIdentity).toMatch(/^[0-9a-f]{64}$/)
+    expect(nodeIdentity).toBe(shellIdentity)
+  })
   it('classifies deterministic pre-launch failures as durable blockers and remote reads as transient', () => {
     for (const code of ['invalid-task-schema', 'matching-trusted-approval-missing', 'invalid-base-sha', 'unsafe-file-type', 'symphony-version-mismatch', 'trusted-path-overlap']) {
       expect(permanentBlocker(new PilotError(code))).not.toBeNull()
@@ -533,6 +545,116 @@ describe('atomic execution and exact tree', () => {
     expect(git(root, ['rev-parse', 'refs/heads/codex/gh-1'])).toBe(commitSha)
     expect(() => validateRecoveryObject(root, { treeSha, commitSha: baseSha, baseSha, branchName: 'codex/gh-1' })).toThrow(PilotError)
   }, 15_000)
+  it('makes claimedAt the deterministic author and committer timestamp across a pre-persistence crash boundary', async () => {
+    const { root, baseSha } = repo()
+    fs.writeFileSync(path.join(root, 'src', 'pages', 'Home.tsx'), 'new\n')
+    const treeSha = buildValidatedTree(root, baseSha, ['src/pages/Home.tsx'], ['src/pages'], 'modify-existing')
+    const claimed = {
+      schemaVersion: 3, state: 'claimed', issueNumber: 6, executionId: 9, baseSha,
+      claimedAt: '2026-08-23T01:02:03.456Z',
+    }
+    const stateFile = path.join(root, 'state', 'GH-6.json')
+    fs.writeFileSync(stateFile, `${JSON.stringify(claimed)}\n`)
+    const originalAuthorName = process.env.GIT_AUTHOR_NAME
+    const originalAuthorDate = process.env.GIT_AUTHOR_DATE
+    const originalCommitterName = process.env.GIT_COMMITTER_NAME
+    const originalCommitterDate = process.env.GIT_COMMITTER_DATE
+    process.env.GIT_AUTHOR_NAME = 'caller-controlled'
+    process.env.GIT_AUTHOR_DATE = '1 +0000'
+    process.env.GIT_COMMITTER_NAME = 'caller-controlled'
+    process.env.GIT_COMMITTER_DATE = '1 +0000'
+    try {
+      // Simulate commit-tree success followed by process death before writeState(finalizing).
+      const firstCommit = createCommitObject(root, treeSha, baseSha, 6, claimed)
+      expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual(claimed)
+      await new Promise((resolve) => setTimeout(resolve, 1_100))
+      // Recovery sees the still-claimed durable state and executes the production
+      // commit constructor again. No push or GitHub request is part of this test.
+      const recoveredCommit = createCommitObject(root, treeSha, baseSha, 6, claimed)
+      expect(recoveredCommit).toBe(firstCommit)
+      expect(git(root, ['rev-parse', `${recoveredCommit}^{tree}`])).toBe(treeSha)
+      expect(git(root, ['rev-parse', `${recoveredCommit}^`])).toBe(baseSha)
+      const object = git(root, ['cat-file', '-p', recoveredCommit])
+      expect(object).toContain('author Kaimono Baton Symphony Host <symphony-host@users.noreply.github.com> 1787446923 +0000')
+      expect(object).toContain('committer Kaimono Baton Symphony Host <symphony-host@users.noreply.github.com> 1787446923 +0000')
+      expect(object).toContain('\n\nchore: implement GH-6')
+    } finally {
+      for (const [key, value] of Object.entries({ GIT_AUTHOR_NAME: originalAuthorName, GIT_AUTHOR_DATE: originalAuthorDate, GIT_COMMITTER_NAME: originalCommitterName, GIT_COMMITTER_DATE: originalCommitterDate })) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  }, 15_000)
+  it('rejects malformed or non-claimed deterministic commit timestamps', () => {
+    expect(deterministicClaimedGitTimestamp('2026-08-23T01:02:03.456Z')).toBe('1787446923 +0000')
+    for (const claimedAt of [undefined, '', '2026-08-23T01:02:03Z', '2026-02-30T01:02:03.456Z', 'Infinity']) {
+      expect(() => deterministicClaimedGitTimestamp(claimedAt)).toThrow(PilotError)
+    }
+    const { root, baseSha } = repo()
+    const treeSha = git(root, ['rev-parse', `${baseSha}^{tree}`])
+    expect(() => createCommitObject(root, treeSha, baseSha, 6, { state: 'finalizing', issueNumber: 6, executionId: 9, baseSha, claimedAt: '2026-08-23T01:02:03.456Z' })).toThrow(PilotError)
+  })
+  it('reuses an exact existing Draft PR without a mutation', async () => {
+    const state = { baseSha: 'a'.repeat(40), commitSha: 'b'.repeat(40), branchName: 'codex/gh-6', changedPaths: ['src/pages/Home.tsx'] }
+    const expected = expectedDraftPr(6, state)
+    const existing = { number: 42, draft: expected.draft, base: { ref: expected.base }, head: { ref: expected.head, sha: expected.headSha }, title: expected.title, body: expected.body }
+    const calls: Array<{ pathname: string, options: any }> = []
+    const request = async (pathname: string, options: any = {}) => {
+      calls.push({ pathname, options })
+      return { ok: true, status: 200, json: async () => [existing] }
+    }
+    await expect(createDraftPr(6, state, request)).resolves.toBe(42)
+    expect(calls).toEqual([{ pathname: `/repos/${PILOT.repository}/pulls?state=open&head=${encodeURIComponent(`${PILOT.owner}:${state.branchName}`)}`, options: {} }])
+  })
+  it('recovers a successful POST with a lost response by reusing the exact existing Draft PR without a second mutation', async () => {
+    const finalizing = { state: 'finalizing', baseSha: 'a'.repeat(40), commitSha: 'b'.repeat(40), branchName: 'codex/gh-6', changedPaths: ['src/pages/Home.tsx'] }
+    const expected = expectedDraftPr(6, finalizing)
+    const stateRootPath = temp('pr-response-loss')
+    const stateFile = path.join(stateRootPath, 'GH-6.json')
+    fs.writeFileSync(stateFile, `${JSON.stringify(finalizing)}\n`)
+    const calls: Array<{ pathname: string, options: any }> = []
+    let remotePr: any
+    const request = async (pathname: string, options: any = {}) => {
+      calls.push({ pathname, options })
+      if (pathname.includes('/pulls?')) return { ok: true, status: 200, json: async () => remotePr ? [remotePr] : [] }
+      if (pathname.endsWith('/pulls') && options.method === 'POST') {
+        expect(options.body).toEqual({ title: expected.title, head: expected.head, base: expected.base, draft: expected.draft, body: expected.body })
+        // The simulated remote accepted the POST before its response body was lost.
+        remotePr = { number: 43, draft: expected.draft, base: { ref: expected.base }, head: { ref: expected.head, sha: expected.headSha }, title: expected.title, body: expected.body }
+        return { ok: true, status: 201, json: async () => { throw new Error('response-lost-after-remote-success') } }
+      }
+      throw new Error(`unexpected-request-${pathname}`)
+    }
+    await expect(createDraftPr(6, finalizing, request)).rejects.toMatchObject({ code: 'github-transient-failure' })
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual(finalizing)
+    await expect(createDraftPr(6, finalizing, request)).resolves.toBe(43)
+    expect(calls.filter(({ options }) => options.method === 'POST')).toHaveLength(1)
+    expect(calls.filter(({ options }) => options.method === 'PATCH')).toHaveLength(0)
+    expect(calls).toHaveLength(3)
+  })
+  it('fails closed without PATCH when an existing Draft PR differs from deterministic pilot metadata', async () => {
+    const state = { baseSha: 'a'.repeat(40), commitSha: 'b'.repeat(40), branchName: 'codex/gh-6', changedPaths: ['src/pages/Home.tsx'] }
+    const expected = expectedDraftPr(6, state)
+    const exact = { number: 42, draft: expected.draft, base: { ref: expected.base }, head: { ref: expected.head, sha: expected.headSha }, title: expected.title, body: expected.body }
+    const variants = [
+      { name: 'body', pr: { ...exact, body: 'human-modified' } },
+      { name: 'title', pr: { ...exact, title: 'human-modified' } },
+      { name: 'base', pr: { ...exact, base: { ref: 'release' } } },
+      { name: 'draft', pr: { ...exact, draft: false } },
+      { name: 'head branch', pr: { ...exact, head: { ...exact.head, ref: 'codex/gh-other' } } },
+      { name: 'head SHA', pr: { ...exact, head: { ...exact.head, sha: 'c'.repeat(40) } } },
+    ]
+    for (const { name, pr } of variants) {
+      const calls: Array<{ pathname: string, options: any }> = []
+      const request = async (pathname: string, options: any = {}) => {
+        calls.push({ pathname, options })
+        return { ok: true, status: 200, json: async () => [pr] }
+      }
+      await expect(createDraftPr(6, state, request), name).rejects.toMatchObject({ code: 'existing-pr-state-mismatch' })
+      expect(calls).toHaveLength(1)
+      expect(calls[0].options.method).toBeUndefined()
+    }
+  })
   it('detects agent mutation of HEAD/index, refs, Git config, and origin', () => {
     const { root, baseSha } = repo(); git(root, ['branch', '-M', 'codex/gh-1']); git(root, ['remote', 'add', 'origin', PILOT.repositoryUrl])
     const prepared = { branchName: 'codex/gh-1', baseSha }; const state = captureAgentGitState(root)

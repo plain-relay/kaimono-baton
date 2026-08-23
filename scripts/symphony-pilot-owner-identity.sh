@@ -25,7 +25,7 @@ symphony_pilot_owner_process_identity() {
     stat_tail=${stat_record##*) }
     set -- $stat_tail
     parent=$2
-    start=$20
+    start=${20}
     comm="$(/usr/bin/tr -d '\n' < "/proc/$pid/comm")" || return 1
     case "$start:$parent" in *[!0-9:]*|:) return 1 ;; esac
     case "$comm" in

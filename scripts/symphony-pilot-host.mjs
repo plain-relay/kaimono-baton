@@ -24,6 +24,9 @@ const APPROVAL_START = '<!-- symphony-approval:v2 -->'
 const APPROVAL_END = '<!-- /symphony-approval -->'
 const SHA40 = /^[0-9a-f]{40}$/
 const SHA64 = /^[0-9a-f]{64}$/
+const ISO_UTC_MILLIS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+const COMMIT_AUTHOR_NAME = 'Kaimono Baton Symphony Host'
+const COMMIT_AUTHOR_EMAIL = 'symphony-host@users.noreply.github.com'
 const OPERATIONS = new Set([
   'update-docs-to-existing-contract',
   'add-tests-for-existing-contract',
@@ -1020,6 +1023,11 @@ function requireGitHubResponse(response, options = {}) {
   throw new PilotError(classification === 'transient' ? 'github-transient-failure' : 'github-permanent-failure')
 }
 
+async function readGitHubJson(response) {
+  try { return await response.json() }
+  catch { throw new PilotError('github-transient-failure') }
+}
+
 async function githubRequest(pathname, { method = 'GET', body, authenticated = false } = {}) {
   const headers = {
     Accept: 'application/vnd.github+json',
@@ -1290,12 +1298,30 @@ export function buildValidatedTree(cwd, baseSha, changedPaths, scopePaths, chang
   }
 }
 
-function createCommitObject(cwd, treeSha, baseSha, issueNumber) {
+export function deterministicClaimedGitTimestamp(claimedAt) {
+  assert(typeof claimedAt === 'string' && ISO_UTC_MILLIS.test(claimedAt), 'invalid-claimed-at')
+  const milliseconds = Date.parse(claimedAt)
+  assert(Number.isSafeInteger(milliseconds) && milliseconds >= 0 && new Date(milliseconds).toISOString() === claimedAt, 'invalid-claimed-at')
+  return `${Math.floor(milliseconds / 1000)} +0000`
+}
+
+export function createCommitObject(cwd, treeSha, baseSha, issueNumber, claimedState) {
+  assert(claimedState?.state === 'claimed', 'finalization-state-invalid')
+  assert(claimedState.issueNumber === issueNumber && claimedState.baseSha === baseSha, 'finalization-state-invalid')
+  assert(Number.isSafeInteger(claimedState.executionId) && claimedState.executionId > 0, 'finalization-state-invalid')
+  const timestamp = deterministicClaimedGitTimestamp(claimedState.claimedAt)
   return privilegedGit(cwd, [
-    '-c', 'user.name=Kaimono Baton Symphony Host',
-    '-c', 'user.email=symphony-host@users.noreply.github.com',
+    '-c', `user.name=${COMMIT_AUTHOR_NAME}`,
+    '-c', `user.email=${COMMIT_AUTHOR_EMAIL}`,
     'commit-tree', treeSha, '-p', baseSha, '-m', `chore: implement GH-${issueNumber}`,
-  ])
+  ], {
+    GIT_AUTHOR_NAME: COMMIT_AUTHOR_NAME,
+    GIT_AUTHOR_EMAIL: COMMIT_AUTHOR_EMAIL,
+    GIT_AUTHOR_DATE: timestamp,
+    GIT_COMMITTER_NAME: COMMIT_AUTHOR_NAME,
+    GIT_COMMITTER_EMAIL: COMMIT_AUTHOR_EMAIL,
+    GIT_COMMITTER_DATE: timestamp,
+  })
 }
 
 export function validateRecoveryObject(cwd, state) {
@@ -1349,34 +1375,48 @@ function prBody({ issueNumber, baseSha, commitSha, changedPaths }) {
   ].join('\n')
 }
 
-async function createDraftPr(issueNumber, state) {
-  const head = encodeURIComponent(`${PILOT.owner}:${state.branchName}`)
-  const list = await githubRequest(`/repos/${PILOT.repository}/pulls?state=open&head=${head}`)
-  requireGitHubResponse(list)
-  const existing = await list.json()
-  assert(Array.isArray(existing) && existing.length <= 1, 'github-pr-list-invalid')
-  const body = prBody({ issueNumber, baseSha: state.baseSha, commitSha: state.commitSha, changedPaths: state.changedPaths })
-  if (existing.length === 1) {
-    const pr = existing[0]
-    assert(pr.draft === true && pr.base?.ref === 'main' && pr.head?.ref === state.branchName, 'existing-pr-not-safe-draft')
-    const update = await githubRequest(`/repos/${PILOT.repository}/pulls/${pr.number}`, {
-      method: 'PATCH', authenticated: true, body: { body },
-    })
-    requireGitHubResponse(update)
-    return pr.number
+export function expectedDraftPr(issueNumber, state) {
+  return {
+    title: `Implement approved task for GH-${issueNumber}`,
+    body: prBody({ issueNumber, baseSha: state.baseSha, commitSha: state.commitSha, changedPaths: state.changedPaths }),
+    head: state.branchName,
+    base: 'main',
+    draft: true,
+    headSha: state.commitSha,
   }
-  const response = await githubRequest(`/repos/${PILOT.repository}/pulls`, {
+}
+
+function verifyExistingDraftPr(pr, expected) {
+  assert(Number.isSafeInteger(pr?.number) && pr.number > 0, 'existing-pr-state-mismatch')
+  assert(pr.draft === expected.draft, 'existing-pr-state-mismatch')
+  assert(pr.base?.ref === expected.base, 'existing-pr-state-mismatch')
+  assert(pr.head?.ref === expected.head, 'existing-pr-state-mismatch')
+  assert(pr.title === expected.title && pr.body === expected.body, 'existing-pr-state-mismatch')
+  if (Object.hasOwn(pr.head ?? {}, 'sha')) assert(SHA40.test(pr.head.sha) && pr.head.sha === expected.headSha, 'existing-pr-state-mismatch')
+  return pr.number
+}
+
+export async function createDraftPr(issueNumber, state, request = githubRequest) {
+  const head = encodeURIComponent(`${PILOT.owner}:${state.branchName}`)
+  const list = await request(`/repos/${PILOT.repository}/pulls?state=open&head=${head}`)
+  requireGitHubResponse(list)
+  const existing = await readGitHubJson(list)
+  assert(Array.isArray(existing) && existing.length <= 1, 'github-pr-list-invalid')
+  const expected = expectedDraftPr(issueNumber, state)
+  if (existing.length === 1) return verifyExistingDraftPr(existing[0], expected)
+  const response = await request(`/repos/${PILOT.repository}/pulls`, {
     method: 'POST', authenticated: true,
     body: {
-      title: `Implement approved task for GH-${issueNumber}`,
-      head: state.branchName, base: 'main', draft: true,
-      body,
+      title: expected.title,
+      head: expected.head,
+      base: expected.base,
+      draft: expected.draft,
+      body: expected.body,
     },
   })
   requireGitHubResponse(response)
-  const pr = await response.json()
-  assert(Number.isInteger(pr.number) && pr.draft === true, 'github-pr-create-invalid')
-  return pr.number
+  const pr = await readGitHubJson(response)
+  return verifyExistingDraftPr(pr, expected)
 }
 
 async function removeLabel(issueNumber) {
@@ -1441,7 +1481,7 @@ async function finalize(cwd) {
       const changedPaths = collectChangedPaths(cwd, prepared.baseSha)
       assert(changedPaths.length > 0, 'no-implementation-change')
       const treeSha = buildValidatedTree(cwd, prepared.baseSha, changedPaths, prepared.task.scopePaths, prepared.task.changeMode)
-      const commitSha = createCommitObject(cwd, treeSha, prepared.baseSha, issueNumber)
+      const commitSha = createCommitObject(cwd, treeSha, prepared.baseSha, issueNumber, state)
       state = { ...state, state: 'finalizing', treeSha, commitSha, changedPaths }
       // The exact commit is durable before the branch ref is changed.
       writeState(issueNumber, state)
