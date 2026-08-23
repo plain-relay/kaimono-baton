@@ -77,11 +77,11 @@ assert_trusted_node_root() {
   assert_trusted_runtime_file "$node_bin"
   assert_trusted_runtime_file "$npm_bin"
   [ -x "$node_bin" ] && [ -x "$npm_bin" ] || fail trusted-node-root-invalid
-  node_version=$(/usr/bin/env -i PATH="$trusted_node_root/bin:/usr/bin:/bin" HOME=/var/empty NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null "$node_bin" --version) || fail trusted-node-version-invalid
+  node_version=$(/usr/bin/env -i PATH="$trusted_node_root/bin:/usr/bin:/bin" HOME=/var/empty NPM_CONFIG_USERCONFIG=/dev/null "$node_bin" --version) || fail trusted-node-version-invalid
   node_major=${node_version#v}
   node_major=${node_major%%.*}
   [ "$node_major" = 22 ] || fail trusted-node-version-invalid
-  npm_version=$(/usr/bin/env -i PATH="$trusted_node_root/bin:/usr/bin:/bin" HOME=/var/empty NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null "$npm_bin" --version) || fail trusted-node-runtime-invalid
+  npm_version=$(/usr/bin/env -i PATH="$trusted_node_root/bin:/usr/bin:/bin" HOME=/var/empty NPM_CONFIG_USERCONFIG=/dev/null "$npm_bin" --version) || fail trusted-node-runtime-invalid
 }
 
 [ "$(/usr/bin/id -u)" = 0 ] || fail root-required-run-explicitly

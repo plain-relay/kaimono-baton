@@ -157,7 +157,6 @@ export function validateTrustedNodeRoot({
     HOME: trustedHome,
     XDG_CONFIG_HOME: trustedXdg,
     NPM_CONFIG_USERCONFIG: process.platform === 'win32' ? 'NUL' : '/dev/null',
-    NPM_CONFIG_GLOBALCONFIG: process.platform === 'win32' ? 'NUL' : '/dev/null',
   }
   const nodeVersion = runTrustedNode(nodeBin, ['--version'], { env, commandRunner })
   assert(/^v22\.\d+\.\d+$/.test(nodeVersion), 'trusted-node-version-invalid')
