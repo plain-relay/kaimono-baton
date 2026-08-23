@@ -44,6 +44,16 @@ function safeInside(root, candidate) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
+function pathsOverlap(left, right) {
+  const leftPath = path.resolve(left)
+  const rightPath = path.resolve(right)
+  return leftPath === rightPath || safeInside(leftPath, rightPath) || safeInside(rightPath, leftPath)
+}
+
+function resolveTrustedPath(target, code) {
+  try { return fs.realpathSync(target) } catch { throw new InstallerSourceError(code) }
+}
+
 function assertTrustedEntry(target, { requireRootOwner, directory, file } = {}) {
   const stat = fs.lstatSync(target)
   assert(!stat.isSymbolicLink(), 'installer-source-symlink')
@@ -76,6 +86,84 @@ function assertTrustedAncestors(target, { requireRootOwner, trustAnchor }) {
     assert(parent !== current && safeInside(anchor, current), 'installer-source-ancestor-invalid')
     current = parent
   }
+}
+
+function assertTrustedNodeTree(root, { requireRootOwner }) {
+  const stat = assertTrustedEntry(root, { requireRootOwner, directory: true })
+  assert(stat.isDirectory(), 'trusted-node-root-invalid')
+  for (const name of fs.readdirSync(root)) {
+    const target = path.join(root, name)
+    const entry = fs.lstatSync(target)
+    if (entry.isSymbolicLink()) {
+      if (process.platform === 'linux' && requireRootOwner) assert(entry.uid === 0, 'trusted-node-root-owner-invalid')
+      const resolved = resolveTrustedPath(target, 'trusted-node-root-symlink-escape')
+      assert(resolved !== root && safeInside(root, resolved), 'trusted-node-root-symlink-escape')
+      continue
+    }
+    const trusted = assertTrustedEntry(target, { requireRootOwner })
+    if (trusted.isDirectory()) assertTrustedNodeTree(target, { requireRootOwner })
+    else assert(trusted.isFile(), 'trusted-node-root-file-type-invalid')
+  }
+}
+
+function trustedNodeEntry(root, entry, { requireRootOwner }) {
+  let entryStat
+  try { entryStat = fs.lstatSync(entry) } catch { throw new InstallerSourceError('trusted-node-root-invalid') }
+  assert(entryStat.isFile() || entryStat.isSymbolicLink(), 'trusted-node-root-invalid')
+  if (process.platform === 'linux' && requireRootOwner) assert(entryStat.uid === 0, 'trusted-node-root-owner-invalid')
+  const resolved = resolveTrustedPath(entry, 'trusted-node-root-invalid')
+  assert(resolved !== root && safeInside(root, resolved), 'trusted-node-root-symlink-escape')
+  assertTrustedAncestors(path.dirname(resolved), { requireRootOwner, trustAnchor: root })
+  const target = assertTrustedEntry(resolved, { requireRootOwner, file: true })
+  if (process.platform !== 'win32') assert((target.mode & 0o111) !== 0, 'trusted-node-root-invalid')
+  return resolved
+}
+
+function runTrustedNode(command, args, { env, commandRunner }) {
+  try {
+    return String(commandRunner(command, args, { env })).trim()
+  } catch {
+    throw new InstallerSourceError('trusted-node-runtime-invalid')
+  }
+}
+
+export function validateTrustedNodeRoot({
+  trustedNodeRoot,
+  sourceRoot,
+  protectedRoots = [],
+  trustedHome = '/var/empty',
+  trustedXdg = '/var/empty',
+  requireRootOwner = process.platform === 'linux',
+  trustAnchor = path.parse(path.resolve(trustedNodeRoot || '/')).root,
+  commandRunner = (command, args, options) => execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], ...options }),
+} = {}) {
+  assert(typeof trustedNodeRoot === 'string' && path.isAbsolute(trustedNodeRoot), 'trusted-node-root-not-absolute')
+  assert(typeof sourceRoot === 'string' && path.isAbsolute(sourceRoot), 'trusted-node-root-invalid')
+  assert(typeof trustedHome === 'string' && path.isAbsolute(trustedHome), 'trusted-node-root-invalid')
+  assert(typeof trustedXdg === 'string' && path.isAbsolute(trustedXdg), 'trusted-node-root-invalid')
+  const root = resolveTrustedPath(trustedNodeRoot, 'trusted-node-root-invalid')
+  assert(root === trustedNodeRoot, 'trusted-node-root-not-canonical')
+  assertTrustedAncestors(root, { requireRootOwner, trustAnchor })
+  for (const protectedRoot of [sourceRoot, ...protectedRoots]) {
+    assert(typeof protectedRoot === 'string' && path.isAbsolute(protectedRoot), 'trusted-node-root-invalid')
+    assert(!pathsOverlap(root, protectedRoot), 'trusted-node-root-overlap')
+  }
+  assertTrustedNodeTree(root, { requireRootOwner })
+
+  const nodeBin = trustedNodeEntry(root, path.join(root, 'bin', 'node'), { requireRootOwner })
+  const npmBin = trustedNodeEntry(root, path.join(root, 'bin', 'npm'), { requireRootOwner })
+  const env = {
+    PATH: `${path.join(root, 'bin')}:/usr/bin:/bin`,
+    HOME: trustedHome,
+    XDG_CONFIG_HOME: trustedXdg,
+    NPM_CONFIG_USERCONFIG: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    NPM_CONFIG_GLOBALCONFIG: process.platform === 'win32' ? 'NUL' : '/dev/null',
+  }
+  const nodeVersion = runTrustedNode(nodeBin, ['--version'], { env, commandRunner })
+  assert(/^v22\.\d+\.\d+$/.test(nodeVersion), 'trusted-node-version-invalid')
+  const npmVersion = runTrustedNode(npmBin, ['--version'], { env, commandRunner })
+  assert(/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(npmVersion), 'trusted-node-runtime-invalid')
+  return { trustedNodeRoot: root, nodeBin, npmBin, nodeVersion, npmVersion }
 }
 
 function gitEnvironment({ home, xdg, hooks, gitBin, gitExecPath }) {
@@ -178,10 +266,11 @@ export function validateInstallerSourceSnapshot({
 }
 
 function main() {
-  const [sourceRoot, sourceCommit, installerPath, gitBin, gitExecPath, trustedHome, trustedXdg, trustedHooks] = process.argv.slice(2)
+  const [sourceRoot, sourceCommit, installerPath, gitBin, gitExecPath, trustedHome, trustedXdg, trustedHooks, trustedNodeRoot, ...protectedRoots] = process.argv.slice(2)
   try {
     validateInstallerSourceSnapshot({ sourceRoot, sourceCommit, installerPath, gitBin, gitExecPath, trustedHome, trustedXdg, trustedHooks })
-    process.stdout.write('[symphony-pilot-install] source-snapshot=PASS\n')
+    const trustedNode = validateTrustedNodeRoot({ trustedNodeRoot, sourceRoot, protectedRoots, trustedHome, trustedXdg })
+    process.stdout.write(`[symphony-pilot-install] source-snapshot=PASS trusted-node=PASS node=${trustedNode.nodeVersion} npm=${trustedNode.npmVersion}\n`)
   } catch (error) {
     process.stderr.write(`[symphony-pilot-install] ${error instanceof InstallerSourceError ? error.code : 'installer-source-invalid'}\n`)
     process.exitCode = 1

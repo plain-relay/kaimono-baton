@@ -113,6 +113,7 @@ The installer must never be invoked from a normal developer or Codex checkout. B
 
 ```sh
 SOURCE_COMMIT='<exact-final-reviewed-40-hex-sha>'
+TRUSTED_NODE_ROOT=/opt/plain-relay/node-22/v22.23.2
 STAGING_PARENT=/opt/plain-relay/kaimono-baton-pilot-staging
 GIT_BIN=/opt/git-2.50.1/bin/git
 GIT_EXEC_PATH=/opt/git-2.50.1/libexec/git-core
@@ -151,10 +152,12 @@ sudo /usr/bin/chmod -R go-w "$STAGING_ROOT"
 sudo /usr/bin/chmod 0700 "$STAGING_ROOT"
 
 sudo "$STAGING_ROOT/scripts/install-symphony-pilot-control.sh" \
-  "$STAGING_ROOT" "$SOURCE_COMMIT" "$SOURCE_COMMIT" /path/to/fresh-clean-openai-symphony
+  "$STAGING_ROOT" "$SOURCE_COMMIT" "$SOURCE_COMMIT" /path/to/fresh-clean-openai-symphony "$TRUSTED_NODE_ROOT"
 ```
 
 All staging commands before the final installer invocation use only the pinned Git binary and system utilities; they do not run `npm`, Node, tests, hooks, or any project executable. The installer self-binds its canonical `$0` to `SOURCE_ROOT/scripts/install-symphony-pilot-control.sh`, requires root ownership and no group/other-writable or symlink path through the staged source and `.git`, rejects unsafe local Git configuration, alternates, and both loose and packed replacement refs, and verifies every copied control file against the blob at `SOURCE_COMMIT`. It refuses a mismatched HEAD/tree, tracked or untracked/ignored source change, or a caller-selected mutable checkout before copying or executing control code.
+
+Install Node 22 independently into a root-owned, non-group/non-other-writable absolute directory outside the source, workspace, state, auth, and control trees. Pass that canonical installation directory as `TRUSTED_NODE_ROOT`; the installer does not inherit `PATH`, `NODE_BIN`, or `NPM_BIN` to choose its runtime. It verifies every Node-tree member and ancestor, permits distribution symlinks only when their canonical target remains inside the selected root, derives `bin/node` and `bin/npm`, and requires Node major 22. `npm` may be a distribution symlink when its canonical target stays in that same root. The installer constructs its own trusted Node-first `PATH` before it invokes Node or npm.
 
 The installer refuses a non-root invocation, a non-clean or wrong-HEAD Symphony input, and existing destinations. It copies only the enumerated pilot artifacts to `/opt/plain-relay/kaimono-baton-symphony-control/<version-or-sha>/`, creates a SHA-256 manifest there, and installs a byte-identical launcher at `/opt/plain-relay/kaimono-baton-symphony-launcher`. It then copies the clean pinned Symphony input to `/opt/plain-relay/openai-symphony-8001b52e`, applies only the manifest-attested pilot patch, makes the complete source and `.git` root-owned and non-group/non-other-writable, and runs the exact runtime verifier before reporting success.
 
@@ -183,8 +186,8 @@ export SYMPHONY_PILOT_CODEX_BIN=/usr/local/libexec/codex-0.147.0
 export SYMPHONY_PILOT_CODE_MODE_HOST_BIN=/opt/plain-relay/codex-runtime/codex-code-mode-host-0.147.0
 export SYMPHONY_PILOT_GIT_BIN=/opt/git-2.50.1/bin/git
 export SYMPHONY_PILOT_GIT_EXEC_PATH=/opt/git-2.50.1/libexec/git-core
-export SYMPHONY_PILOT_NODE_BIN=/usr/bin/node
-export SYMPHONY_PILOT_NPM_BIN=/usr/bin/npm
+export SYMPHONY_PILOT_NODE_BIN=/opt/plain-relay/node-22/v22.23.2/bin/node
+export SYMPHONY_PILOT_NPM_BIN=/opt/plain-relay/node-22/v22.23.2/bin/npm
 export SYMPHONY_PILOT_BWRAP_BIN=/opt/bubblewrap-0.11.2/bin/bwrap
 export SYMPHONY_PILOT_SHELL_BIN=/bin/sh
 export SYMPHONY_PILOT_INSTANCE_ID='<a fresh random UUID unique to this Symphony process>'

@@ -38,8 +38,54 @@ assert_trusted_runtime_file() {
   [ "$((0$mode & 022))" -eq 0 ] || fail trusted-runtime-invalid
 }
 
+paths_overlap() {
+  case "$1/" in "$2/"*) return 0 ;; esac
+  case "$2/" in "$1/"*) return 0 ;; esac
+  return 1
+}
+
+assert_trusted_node_root() {
+  candidate=$1
+  case "$candidate" in /*) ;; *) fail trusted-node-root-not-absolute ;; esac
+  trusted_node_root=$(/usr/bin/readlink -f -- "$candidate") || fail trusted-node-root-invalid
+  [ "$trusted_node_root" = "$candidate" ] || fail trusted-node-root-not-canonical
+  [ -d "$trusted_node_root" ] && [ ! -L "$trusted_node_root" ] || fail trusted-node-root-invalid
+  for protected in "$source_root" "$destination" "$symphony_destination" "$launcher_path"; do
+    paths_overlap "$trusted_node_root" "$protected" && fail trusted-node-root-overlap
+  done
+  assert_root_immutable_ancestors "$trusted_node_root"
+  if /usr/bin/find -P "$trusted_node_root" -xdev ! -type d ! -type f ! -type l -print -quit | /usr/bin/grep -q .; then fail trusted-node-root-file-type-invalid; fi
+  if /usr/bin/find -P "$trusted_node_root" -xdev ! -uid 0 -print -quit | /usr/bin/grep -q .; then fail trusted-node-root-owner-invalid; fi
+  if /usr/bin/find -P "$trusted_node_root" -xdev \( -type d -o -type f \) -perm /022 -print -quit | /usr/bin/grep -q .; then fail trusted-node-root-writable; fi
+  /usr/bin/find -P "$trusted_node_root" -xdev -type l -exec /bin/sh -c '
+    root=$1
+    shift
+    for link do
+      target=$(/usr/bin/readlink -f -- "$link") || exit 1
+      case "$target" in "$root"/*) ;; *) exit 1 ;; esac
+    done
+  ' /bin/sh "$trusted_node_root" {} + || fail trusted-node-root-symlink-escape
+
+  node_entry="$trusted_node_root/bin/node"
+  npm_entry="$trusted_node_root/bin/npm"
+  [ -f "$node_entry" ] || fail trusted-node-root-invalid
+  [ -f "$npm_entry" ] || fail trusted-node-root-invalid
+  node_bin=$(/usr/bin/readlink -f -- "$node_entry") || fail trusted-node-root-invalid
+  npm_bin=$(/usr/bin/readlink -f -- "$npm_entry") || fail trusted-node-root-invalid
+  case "$node_bin" in "$trusted_node_root"/*) ;; *) fail trusted-node-root-symlink-escape ;; esac
+  case "$npm_bin" in "$trusted_node_root"/*) ;; *) fail trusted-node-root-symlink-escape ;; esac
+  assert_trusted_runtime_file "$node_bin"
+  assert_trusted_runtime_file "$npm_bin"
+  [ -x "$node_bin" ] && [ -x "$npm_bin" ] || fail trusted-node-root-invalid
+  node_version=$(/usr/bin/env -i PATH="$trusted_node_root/bin:/usr/bin:/bin" HOME=/var/empty NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null "$node_bin" --version) || fail trusted-node-version-invalid
+  node_major=${node_version#v}
+  node_major=${node_major%%.*}
+  [ "$node_major" = 22 ] || fail trusted-node-version-invalid
+  npm_version=$(/usr/bin/env -i PATH="$trusted_node_root/bin:/usr/bin:/bin" HOME=/var/empty NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null "$npm_bin" --version) || fail trusted-node-runtime-invalid
+}
+
 [ "$(/usr/bin/id -u)" = 0 ] || fail root-required-run-explicitly
-[ "$#" -ge 4 ] && [ "$#" -le 5 ] || fail 'usage: install-symphony-pilot-control.sh ROOT_OWNED_SOURCE_ROOT SOURCE_COMMIT VERSION_OR_SHA CLEAN_SYMPHONY_SOURCE_ROOT [LAUNCHER_PATH]'
+[ "$#" -ge 5 ] && [ "$#" -le 6 ] || fail 'usage: install-symphony-pilot-control.sh ROOT_OWNED_SOURCE_ROOT SOURCE_COMMIT VERSION_OR_SHA CLEAN_SYMPHONY_SOURCE_ROOT TRUSTED_NODE_ROOT [LAUNCHER_PATH]'
 
 case "$1" in /*) ;; *) fail installer-source-root-not-absolute ;; esac
 source_root=$(/usr/bin/readlink -f -- "$1")
@@ -52,7 +98,8 @@ installer_path=$(/usr/bin/readlink -f -- "$0")
 source_commit=$2
 version=$3
 symphony_source_root=$(/usr/bin/readlink -f -- "$4")
-launcher_path=${5:-/opt/plain-relay/kaimono-baton-symphony-launcher}
+trusted_node_root=$5
+launcher_path=${6:-/opt/plain-relay/kaimono-baton-symphony-launcher}
 case "$source_commit" in *[!0123456789abcdef]*|'') fail installer-source-commit-invalid ;; esac
 [ "${#source_commit}" -eq 40 ] || fail installer-source-commit-invalid
 case "$version" in *[!A-Za-z0-9._-]*|'') fail invalid-version ;; esac
@@ -71,8 +118,6 @@ assert_root_immutable_tree "$source_root"
 
 git_bin=/opt/git-2.50.1/bin/git
 git_exec_path=/opt/git-2.50.1/libexec/git-core
-node_bin=$(/usr/bin/readlink -f -- /usr/bin/node)
-npm_bin=$(/usr/bin/readlink -f -- /usr/bin/npm)
 bwrap_bin=/opt/bubblewrap-0.11.2/bin/bwrap
 shell_bin=$(/usr/bin/readlink -f -- /bin/sh)
 [ -d "$git_exec_path" ] && [ ! -L "$git_exec_path" ] || fail trusted-git-runtime-invalid
@@ -87,7 +132,8 @@ for helper_name in git-remote-http git-remote-https; do
   case "$helper_path" in "$git_root"/*) ;; *) fail trusted-git-runtime-invalid ;; esac
   assert_trusted_runtime_file "$helper_path"
 done
-for trusted in "$node_bin" "$npm_bin" "$bwrap_bin" "$shell_bin"; do assert_trusted_runtime_file "$trusted"; done
+for trusted in "$bwrap_bin" "$shell_bin"; do assert_trusted_runtime_file "$trusted"; done
+assert_trusted_node_root "$trusted_node_root"
 
 install_tmp=$(/usr/bin/mktemp -d /var/tmp/kaimono-baton-symphony-install.XXXXXX)
 cleanup() {
@@ -115,7 +161,8 @@ trusted_git() {
 /usr/bin/env -i PATH="${node_bin%/*}:${git_bin%/*}:$git_exec_path:/usr/bin:/bin" \
   "$node_bin" "$source_root/scripts/symphony-pilot-install-source.mjs" \
   "$source_root" "$source_commit" "$installer_path" "$git_bin" "$git_exec_path" \
-  "$install_tmp/home" "$install_tmp/xdg" "$install_tmp/hooks"
+  "$install_tmp/home" "$install_tmp/xdg" "$install_tmp/hooks" "$trusted_node_root" \
+  "$destination" "$symphony_destination" "$launcher_path"
 
 [ "$(trusted_git "$symphony_source_root" rev-parse --verify HEAD)" = "$symphony_sha" ] || fail symphony-source-base-invalid
 [ -z "$(trusted_git "$symphony_source_root" status --porcelain=v1 --untracked-files=all --ignored=matching)" ] || fail symphony-source-not-clean

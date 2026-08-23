@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { INSTALLER_SOURCE_FILES, validateInstallerSourceSnapshot } from './symphony-pilot-install-source.mjs'
+import { INSTALLER_SOURCE_FILES, validateInstallerSourceSnapshot, validateTrustedNodeRoot } from './symphony-pilot-install-source.mjs'
 
 const dirs: string[] = []
 const repositoryUrl = 'https://github.com/plain-relay/kaimono-baton.git'
@@ -69,6 +69,44 @@ function expectCode(action: () => unknown, code: string) {
   throw new Error(`expected-${code}`)
 }
 
+function trustedNodeFixture() {
+  const root = temp('trusted-node')
+  const nodeRoot = path.join(root, 'node-22')
+  const nodeBin = path.join(nodeRoot, 'bin', 'node')
+  const npmTarget = path.join(nodeRoot, 'lib', 'npm', 'npm-cli.js')
+  fs.mkdirSync(path.dirname(nodeBin), { recursive: true })
+  fs.mkdirSync(path.dirname(npmTarget), { recursive: true })
+  fs.writeFileSync(nodeBin, 'node\n')
+  fs.writeFileSync(npmTarget, 'npm\n')
+  fs.chmodSync(nodeBin, 0o755)
+  fs.chmodSync(npmTarget, 0o755)
+  if (process.platform === 'win32') fs.copyFileSync(npmTarget, path.join(nodeRoot, 'bin', 'npm'))
+  else fs.symlinkSync(npmTarget, path.join(nodeRoot, 'bin', 'npm'))
+  return { root, nodeRoot, nodeBin, npmTarget, npmBin: fs.realpathSync(path.join(nodeRoot, 'bin', 'npm')) }
+}
+
+function validateNode(input: ReturnType<typeof trustedNodeFixture>, overrides: Record<string, unknown> = {}) {
+  const calls: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> = []
+  const commandRunner = (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+    calls.push({ command, args, env: options.env })
+    if (command === input.nodeBin) return 'v22.23.2\n'
+    if (command === input.npmBin) return '10.9.8\n'
+    throw new Error('unexpected-command')
+  }
+  const result = validateTrustedNodeRoot({
+    trustedNodeRoot: input.nodeRoot,
+    sourceRoot: path.join(input.root, 'source'),
+    protectedRoots: [path.join(input.root, 'control'), path.join(input.root, 'symphony')],
+    trustedHome: path.join(input.root, 'home'),
+    trustedXdg: path.join(input.root, 'xdg'),
+    requireRootOwner: false,
+    trustAnchor: input.root,
+    commandRunner,
+    ...overrides,
+  })
+  return { result, calls }
+}
+
 afterEach(() => {
   for (const target of dirs.splice(0)) fs.rmSync(target, { recursive: true, force: true })
 })
@@ -109,5 +147,74 @@ describe('installer immutable source snapshot', () => {
     expectCode(() => validate(replacement), 'installer-source-replace-refs')
     const config = fixture(); git(config.source, ['config', '--local', 'filter.poison.clean', 'malicious'])
     expectCode(() => validate(config), 'installer-source-unsafe-git-config')
+  })
+})
+
+describe('trusted Node root', () => {
+  it('requires an explicit trusted Node root instead of fixed or inherited Node paths', () => {
+    const installer = fs.readFileSync(path.resolve('scripts/install-symphony-pilot-control.sh'), 'utf8')
+    expect(installer).toContain('CLEAN_SYMPHONY_SOURCE_ROOT TRUSTED_NODE_ROOT [LAUNCHER_PATH]')
+    expect(installer).toContain('node_entry="$trusted_node_root/bin/node"')
+    expect(installer).toContain('npm_entry="$trusted_node_root/bin/npm"')
+    expect(installer).not.toContain('/usr/bin/readlink -f -- /usr/bin/node')
+    expect(installer).not.toContain('/usr/bin/readlink -f -- /usr/bin/npm')
+  })
+  it('accepts a Node 22 root', () => {
+    const input = trustedNodeFixture()
+    const { result, calls } = validateNode(input)
+    expect(result).toMatchObject({ trustedNodeRoot: input.nodeRoot, nodeBin: input.nodeBin, npmBin: input.npmBin, nodeVersion: 'v22.23.2', npmVersion: '10.9.8' })
+    expect(calls).toHaveLength(2)
+  })
+  it('rejects missing, relative, and overlapping Node roots', () => {
+    const input = trustedNodeFixture()
+    expectCode(() => validateNode(input, { trustedNodeRoot: path.join(input.root, 'missing') }), 'trusted-node-root-invalid')
+    const missingNode = trustedNodeFixture(); fs.unlinkSync(missingNode.nodeBin)
+    expectCode(() => validateNode(missingNode), 'trusted-node-root-invalid')
+    expectCode(() => validateNode(input, { trustedNodeRoot: 'relative-node-root' }), 'trusted-node-root-not-absolute')
+    expectCode(() => validateNode(input, { protectedRoots: [input.nodeRoot] }), 'trusted-node-root-overlap')
+  })
+  it.runIf(process.platform !== 'win32')('rejects a writable Node root', () => {
+    const input = trustedNodeFixture()
+    fs.chmodSync(input.nodeRoot, 0o770)
+    expectCode(() => validateNode(input), 'installer-source-writable')
+  })
+  it.runIf(process.platform !== 'win32')('rejects writable ancestors', () => {
+    const ancestor = trustedNodeFixture(); fs.chmodSync(ancestor.root, 0o770)
+    expectCode(() => validateNode(ancestor), 'installer-source-writable')
+  })
+  it.runIf(process.platform === 'linux')('accepts an in-root npm symlink and rejects node/npm symlink escapes', () => {
+    const valid = trustedNodeFixture()
+    expect(validateNode(valid).result.npmBin).toBe(valid.npmTarget)
+    const nodeEscape = trustedNodeFixture(); fs.unlinkSync(nodeEscape.nodeBin); fs.symlinkSync('/bin/sh', nodeEscape.nodeBin)
+    expectCode(() => validateNode(nodeEscape), 'trusted-node-root-symlink-escape')
+    const npmEscape = trustedNodeFixture(); fs.unlinkSync(path.join(npmEscape.nodeRoot, 'bin', 'npm')); fs.symlinkSync('/bin/sh', path.join(npmEscape.nodeRoot, 'bin', 'npm'))
+    expectCode(() => validateNode(npmEscape), 'trusted-node-root-symlink-escape')
+  })
+  it('rejects a Node major other than 22', () => {
+    const input = trustedNodeFixture()
+    expectCode(() => validateNode(input, { commandRunner: () => 'v20.19.0\n' }), 'trusted-node-version-invalid')
+  })
+  it('does not inherit caller PATH or NODE_BIN/NPM_BIN values', () => {
+    const input = trustedNodeFixture()
+    const oldPath = process.env.PATH; const oldNode = process.env.NODE_BIN; const oldNpm = process.env.NPM_BIN
+    try {
+      process.env.PATH = path.join(input.root, 'fake-bin')
+      process.env.NODE_BIN = path.join(input.root, 'fake-node')
+      process.env.NPM_BIN = path.join(input.root, 'fake-npm')
+      const { calls } = validateNode(input)
+      for (const call of calls) {
+        expect(call.env.PATH).toBe(`${path.join(input.nodeRoot, 'bin')}:/usr/bin:/bin`)
+        expect(call.command).not.toBe(process.env.NODE_BIN)
+        expect(call.command).not.toBe(process.env.NPM_BIN)
+      }
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath
+      if (oldNode === undefined) delete process.env.NODE_BIN; else process.env.NODE_BIN = oldNode
+      if (oldNpm === undefined) delete process.env.NPM_BIN; else process.env.NPM_BIN = oldNpm
+    }
+  })
+  it.runIf(process.platform === 'linux' && process.getuid?.() !== 0)('rejects a user-owned Node root when root ownership is required', () => {
+    const input = trustedNodeFixture()
+    expectCode(() => validateNode(input, { requireRootOwner: true }), 'installer-source-owner-invalid')
   })
 })
