@@ -88,7 +88,7 @@ function assertTrustedAncestors(target, { requireRootOwner, trustAnchor }) {
   }
 }
 
-function assertTrustedNodeTree(root, { requireRootOwner }) {
+function assertTrustedNodeTree(root, { requireRootOwner, trustedRoot = root }) {
   const stat = assertTrustedEntry(root, { requireRootOwner, directory: true })
   assert(stat.isDirectory(), 'trusted-node-root-invalid')
   for (const name of fs.readdirSync(root)) {
@@ -97,11 +97,11 @@ function assertTrustedNodeTree(root, { requireRootOwner }) {
     if (entry.isSymbolicLink()) {
       if (process.platform === 'linux' && requireRootOwner) assert(entry.uid === 0, 'trusted-node-root-owner-invalid')
       const resolved = resolveTrustedPath(target, 'trusted-node-root-symlink-escape')
-      assert(resolved !== root && safeInside(root, resolved), 'trusted-node-root-symlink-escape')
+      assert(resolved !== trustedRoot && safeInside(trustedRoot, resolved), 'trusted-node-root-symlink-escape')
       continue
     }
     const trusted = assertTrustedEntry(target, { requireRootOwner })
-    if (trusted.isDirectory()) assertTrustedNodeTree(target, { requireRootOwner })
+    if (trusted.isDirectory()) assertTrustedNodeTree(target, { requireRootOwner, trustedRoot })
     else assert(trusted.isFile(), 'trusted-node-root-file-type-invalid')
   }
 }
