@@ -13,12 +13,12 @@ const product: Product = {
   sortOrder: 1,
 }
 
-function render(quantity: number, memo = ''): string {
+function render(quantity: number, memo = '', isExpanded = true): string {
   return renderToStaticMarkup(
     <ProductCard
       product={product}
       draft={{ quantity, memo }}
-      isExpanded
+      isExpanded={isExpanded}
       onIncrease={() => undefined}
       onDecrease={() => undefined}
       onToggleDetails={() => undefined}
@@ -28,6 +28,12 @@ function render(quantity: number, memo = ''): string {
 }
 
 describe('ProductCard limits', () => {
+  it('shows selected conditions when collapsed, without duplicating the expanded editor', () => {
+    expect(render(1, '国産', false)).toContain('条件: 国産')
+    expect(render(0, '国産', false)).not.toContain('product-condition-summary')
+    expect(render(1, '  ', false)).not.toContain('product-condition-summary')
+    expect(render(1, '国産')).not.toContain('product-condition-summary')
+  })
   it('disables plus at 20 and displays the quantity limit', () => {
     const markup = render(20)
     expect(markup).toContain('数量は20個までです。')

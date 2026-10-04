@@ -87,7 +87,7 @@ describe('ShoppingListPage product photo isolation', () => {
     expect(container.textContent).toContain('写真を取得できませんでした')
     expect(container.textContent).toContain('牛乳')
     const cart = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
-      (candidate) => candidate.textContent?.trim() === 'かごに入れる',
+      (candidate) => candidate.textContent?.trim() === '1本をかごに入れる',
     )
     expect(cart).toBeDefined()
 

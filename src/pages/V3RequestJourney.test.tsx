@@ -167,14 +167,14 @@ describe('v3 request to completed shopping journey', () => {
       '2ケースをかごに入れる',
     )
 
-    await clickAndFlush(itemButton('家庭の洗剤😀', '相談する'))
+    await clickAndFlush(itemButton('家庭の洗剤😀', '質問・買わない'))
     await clickAndFlush(
       container.querySelector<HTMLInputElement>(
         'input[type="radio"][value="soldOut"]',
       )!,
     )
     await clickAndFlush(button('今回は買わない'))
-    await clickAndFlush(itemButton('一回だけの商品', 'かごに入れる'))
+    await clickAndFlush(itemButton('一回だけの商品', '1個をかごに入れる'))
 
     const checkedBeforeRemount = JSON.parse(
       window.localStorage.getItem(

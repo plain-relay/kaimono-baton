@@ -32,6 +32,7 @@ describe('CreateRequestPage simplified request form', () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
       true
     window.localStorage.clear()
+    vi.stubGlobal('confirm', vi.fn(() => true))
     window.history.replaceState({}, '', '/#/create')
     Object.defineProperty(window.navigator, 'share', {
       configurable: true,
@@ -54,6 +55,7 @@ describe('CreateRequestPage simplified request form', () => {
     delete (window.navigator as unknown as Record<string, unknown>).share
     delete (window.navigator as unknown as Record<string, unknown>).clipboard
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   async function renderPage() {
@@ -117,6 +119,95 @@ describe('CreateRequestPage simplified request form', () => {
     )
     window.localStorage.setItem('otsukai:createDraft', JSON.stringify(saved))
   }
+
+  it('resumes explicit empty conditions and restores defaults only when starting the next list', async () => {
+    const savedDraft = { apple: { quantity: 1, memo: '' }, 'pork-koma': { quantity: 2, memo: '今回だけ外国産も可' } }
+    window.localStorage.setItem('otsukai:createDraft', JSON.stringify(savedDraft))
+    const catalog = updateBaseProduct(
+      createEmptyHouseholdCatalog('2026-08-01T00:00:00.000Z'),
+      'apple',
+      { name: '家庭のりんご', unit: '玉', categoryId: 'fruits', hidden: false },
+      '2026-08-01T00:01:00.000Z',
+    )
+    window.localStorage.setItem('otsukai:householdCatalog:v1', JSON.stringify(catalog))
+    await renderPage()
+    expect(container.textContent).not.toContain('条件: 王林かフジ')
+    await clickAndFlush(container.querySelector<HTMLButtonElement>('[aria-label^="豚小間肉の条件を閉じる"]')!)
+    expect(container.textContent).toContain('条件: 今回だけ外国産も可')
+    await clickAndFlush(button('＋ リストにないものを追加'))
+    await inputText('[aria-describedby="custom-name-count"]', '一回だけの電池')
+    await clickAndFlush(button('追加'))
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await clickAndFlush(button('次の買い物リストを作る'))
+    expect(container.textContent).toContain('一回だけの電池')
+    expect(JSON.parse(window.localStorage.getItem('otsukai:createDraft')!).apple).toEqual(savedDraft.apple)
+    confirm.mockReturnValue(true)
+    await clickAndFlush(button('次の買い物リストを作る'))
+    const nextDraft = JSON.parse(window.localStorage.getItem('otsukai:createDraft')!)
+    expect(Object.values(nextDraft).every((item: unknown) => (item as { quantity: number }).quantity === 0)).toBe(true)
+    expect(nextDraft.apple).toEqual({ quantity: 0, memo: '王林かフジ' })
+    expect(nextDraft['pork-koma']).toEqual({ quantity: 0, memo: '国産' })
+    expect(container.textContent).not.toContain('一回だけの電池')
+    expect(window.localStorage.getItem('otsukai:householdCatalog:v1')).toBe(JSON.stringify(catalog))
+
+    confirm.mockReturnValue(false)
+    await clickAndFlush(button('条件も含めてすべて消去'))
+    expect(confirm).toHaveBeenLastCalledWith('条件も含めて入力内容をすべて消去しますか？')
+    expect(JSON.parse(window.localStorage.getItem('otsukai:createDraft')!).apple.memo).toBe('王林かフジ')
+    confirm.mockReturnValue(true)
+    await clickAndFlush(button('条件も含めてすべて消去'))
+    act(() => root.unmount())
+    root = createRoot(container)
+    await renderPage()
+    expect(JSON.parse(window.localStorage.getItem('otsukai:createDraft')!).apple).toEqual({ quantity: 0, memo: '' })
+    const increaseApple = container.querySelector<HTMLButtonElement>('[aria-label^="家庭のりんごを1玉増やす"]')!
+    await clickAndFlush(increaseApple)
+    expect(container.textContent).not.toContain('条件: 王林かフジ')
+  })
+
+  it('creates a distinct next request without changing the previously shared fixed URL', async () => {
+    const share = vi.fn(async (_data: ShareData) => undefined)
+    Object.defineProperty(window.navigator, 'share', { configurable: true, value: share })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    await renderPage()
+    const increase = () => container.querySelector<HTMLButtonElement>('[aria-label^="キャベツを1個増やす"]')!
+    await clickAndFlush(increase())
+    await clickAndFlush(button('確認へ'))
+    await clickAndFlush(button('LINEで送る'))
+    const oldUrl = share.mock.calls[0][0].text!.split('\n').at(-1)!
+    const oldPayload = decodeCompactRequestV2OrV3(new URL(oldUrl).hash.slice('#/l/'.length))
+    await clickAndFlush(button('修正する'))
+    window.history.replaceState({ keep: true, otsukaiCreateRequestReturnState: { sharedUrl: oldUrl } }, '', '/#/create')
+    await clickAndFlush(button('次の買い物リストを作る'))
+    expect(window.history.state).toEqual({ keep: true })
+    await clickAndFlush(increase())
+    await clickAndFlush(button('確認へ'))
+    await clickAndFlush(button('LINEで送る'))
+    const newUrl = share.mock.calls[1][0].text!.split('\n').at(-1)!
+    const nextPayload = decodeCompactRequestV2OrV3(new URL(newUrl).hash.slice('#/l/'.length))
+    expect(nextPayload.requestId).not.toBe(oldPayload.requestId)
+    expect(decodeCompactRequestV2OrV3(new URL(oldUrl).hash.slice('#/l/'.length))).toEqual(oldPayload)
+  })
+
+  it('blocks reset while native sharing is in progress', async () => {
+    let finishShare: () => void = () => {}
+    const share = vi.fn(() => new Promise<void>((resolve) => { finishShare = resolve }))
+    Object.defineProperty(window.navigator, 'share', { configurable: true, value: share })
+    const confirm = vi.spyOn(window, 'confirm')
+    await renderPage()
+    await clickAndFlush(container.querySelector<HTMLButtonElement>('[aria-label^="キャベツを1個増やす"]')!)
+    await clickAndFlush(button('確認へ'))
+    await clickAndFlush(button('LINEで送る'))
+    expect(button('修正する').disabled).toBe(true)
+    await clickAndFlush(button('修正する'))
+    expect(container.textContent).not.toContain('次の買い物リストを作る')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(JSON.parse(window.localStorage.getItem('otsukai:createDraft')!).cabbage.quantity).toBe(1)
+    await act(async () => { finishShare(); await Promise.resolve() })
+    await clickAndFlush(button('修正する'))
+    expect(button('次の買い物リストを作る').disabled).toBe(false)
+  })
 
   function saveDraftWithHighEntropyConditions(total: number) {
     let remaining = total

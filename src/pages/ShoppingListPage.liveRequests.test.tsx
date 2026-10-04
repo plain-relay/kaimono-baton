@@ -145,7 +145,7 @@ describe('ShoppingListPage live request synchronization', () => {
   it('shows additions and changes while preserving in-cart progress', async () => {
     await renderPage()
     expect(container.textContent).toContain('牛乳')
-    await click(button('かごに入れる'))
+    await click(button('1本をかごに入れる'))
     expect(storedProgress()['item-1']).toBe('inCart')
 
     const next = snapshot({ revision: 2, quantity: 2, memo: '低脂肪' })
@@ -179,7 +179,7 @@ describe('ShoppingListPage live request synchronization', () => {
 
   it('keeps a requester cancellation as history with progress-specific wording', async () => {
     await renderPage()
-    await click(button('かごに入れる'))
+    await click(button('1本をかごに入れる'))
     vi.mocked(api.get).mockResolvedValueOnce({
       status: 'found',
       request: snapshot({
@@ -207,7 +207,7 @@ describe('ShoppingListPage live request synchronization', () => {
     await click(button('更新を確認'))
     expect(container.textContent).toContain('共有期限が切れました')
     expect(container.textContent).toContain('牛乳')
-    await click(button('かごに入れる'))
+    await click(button('1本をかごに入れる'))
     expect(storedProgress()['item-1']).toBe('inCart')
   })
 
@@ -230,6 +230,6 @@ describe('ShoppingListPage live request synchronization', () => {
     })
     expect(container.textContent).toContain('写真を取得できませんでした')
     expect(container.textContent).toContain('牛乳')
-    expect(button('かごに入れる').disabled).toBe(false)
+    expect(button('1本をかごに入れる').disabled).toBe(false)
   })
 })

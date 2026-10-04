@@ -12,6 +12,7 @@ import {
 import {
   buildBulkConsultationMessage,
   buildIndividualConsultationMessage,
+  isFreeQuestion,
 } from '../utils/shoppingMessages'
 import type {
   NativeShareInput,
@@ -159,7 +160,9 @@ export function useConsultationWorkflow({
       const existingIssue = consultationIssue ?? getItemIssue(itemId)
       setCurrentDraft({
         itemId,
-        reason: existingIssue?.reason,
+        reason: isFreeQuestion(consultationIssue)
+          ? undefined
+          : existingIssue?.reason,
         note: existingIssue?.note ?? '',
       })
     },
@@ -171,7 +174,7 @@ export function useConsultationWorkflow({
   }, [setCurrentDraft])
 
   const setReason = useCallback(
-    (reason: UnavailableReason) => {
+    (reason: UnavailableReason | undefined) => {
       const currentDraft = draftRef.current
       if (currentDraft) {
         setCurrentDraft({ ...currentDraft, reason })
@@ -190,20 +193,23 @@ export function useConsultationWorkflow({
     [setCurrentDraft],
   )
 
-  const getDraftIssue = useCallback(() => {
+  const getDraftIssue = useCallback((allowQuestion = false) => {
     const currentDraft = draftRef.current
-    if (!currentDraft?.reason) {
+    if (
+      !currentDraft ||
+      (!currentDraft.reason && !(allowQuestion && currentDraft.note.trim()))
+    ) {
       return null
     }
 
     return {
       itemId: currentDraft.itemId,
-      issue: createIssue(currentDraft.reason, currentDraft.note),
+      issue: createIssue(currentDraft.reason ?? 'other', currentDraft.note),
     }
   }, [])
 
   const addToQueue = useCallback(() => {
-    const draftIssue = getDraftIssue()
+    const draftIssue = getDraftIssue(true)
     if (!draftIssue) {
       return
     }
@@ -305,7 +311,7 @@ export function useConsultationWorkflow({
   )
 
   const shareDraftImmediately = useCallback(async () => {
-    const draftIssue = getDraftIssue()
+    const draftIssue = getDraftIssue(true)
     if (!draftIssue) {
       return
     }

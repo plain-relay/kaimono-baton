@@ -11,7 +11,7 @@ type ConsultationDialogProps = {
   selectedReason?: UnavailableReason
   note: string
   isSharing: boolean
-  onReasonChange: (reason: UnavailableReason) => void
+  onReasonChange: (reason: UnavailableReason | undefined) => void
   onNoteChange: (note: string) => void
   onShareImmediately: () => void
   onAddToQueue: () => void
@@ -41,10 +41,11 @@ export function ConsultationDialog({
 }: ConsultationDialogProps) {
   const titleId = `consultation-title-${item.id}`
   const descriptionId = `consultation-description-${item.id}`
+  const canShare = Boolean(selectedReason || note.trim())
 
   return (
     <ShoppingDialog
-      title={`${item.productNameSnapshot}について相談する`}
+      title={`${item.productNameSnapshot}について質問・買わない`}
       titleId={titleId}
       descriptionId={descriptionId}
       onClose={onClose}
@@ -55,8 +56,41 @@ export function ConsultationDialog({
         {item.memo ? <span>条件: {item.memo}</span> : null}
       </div>
 
+      <label className="stack-field">
+        <span>質問・伝えたいこと</span>
+        <ImeAwareTextInput
+          value={note}
+          onCommit={(candidate) => {
+            onNoteChange(candidate)
+            return { value: candidate, accepted: candidate !== note }
+          }}
+          placeholder="例：この大きいサイズでもいい？"
+          aria-label={`${item.productNameSnapshot}への質問・伝えたいこと`}
+          disabled={isSharing}
+        />
+      </label>
+      <p className="helper-text">質問は状況を選ばずに送れます。</p>
+      <div className="shopping-dialog-actions consultation-dialog-actions">
+        <button
+          type="button"
+          className="primary-button"
+          onClick={onShareImmediately}
+          disabled={!canShare || isSharing}
+        >
+          {isSharing ? '共有中…' : selectedReason ? 'LINEですぐ相談' : 'LINEで質問する'}
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={onAddToQueue}
+          disabled={!canShare || isSharing}
+        >
+          まとめ相談に追加
+        </button>
+      </div>
+
       <fieldset className="consultation-reason-fieldset" disabled={isSharing}>
-        <legend>状況を選んでください</legend>
+        <legend>見つからない・買わない場合</legend>
         <div className="issue-reason-options">
           {UNAVAILABLE_REASONS.map((reason) => (
             <label
@@ -74,42 +108,14 @@ export function ConsultationDialog({
             </label>
           ))}
         </div>
+        {selectedReason ? (
+          <button type="button" className="ghost-button" onClick={() => onReasonChange(undefined)}>
+            状況の選択を解除
+          </button>
+        ) : null}
       </fieldset>
-
-      <label className="stack-field">
-        <span>補足（任意）</span>
-        <ImeAwareTextInput
-          value={note}
-          onCommit={(candidate) => {
-            onNoteChange(candidate)
-            return {
-              value: candidate,
-              accepted: candidate !== note,
-            }
-          }}
-          placeholder="例：別の容量ならありました"
-          aria-label={`${item.productNameSnapshot}の相談内容の補足`}
-          disabled={isSharing}
-        />
-      </label>
-
+      <p className="helper-text">買わない理由を選ぶと、LINEを送らずに見送りを記録できます。</p>
       <div className="shopping-dialog-actions consultation-dialog-actions">
-        <button
-          type="button"
-          className="primary-button"
-          onClick={onShareImmediately}
-          disabled={!selectedReason || isSharing}
-        >
-          {isSharing ? '共有中…' : 'LINEですぐ相談'}
-        </button>
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={onAddToQueue}
-          disabled={!selectedReason || isSharing}
-        >
-          まとめ相談に追加
-        </button>
         <button
           type="button"
           className="secondary-button"

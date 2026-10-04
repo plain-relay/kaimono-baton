@@ -2,7 +2,7 @@ import type {
   ConsultationEntry,
   ShoppingRequestItemPayload,
 } from '../types/shopping'
-import { getUnavailableReasonLabel } from '../utils/shoppingMessages'
+import { getUnavailableReasonLabel, isFreeQuestion } from '../utils/shoppingMessages'
 
 export type ConsultationSummaryEntry = {
   item: ShoppingRequestItemPayload
@@ -63,8 +63,14 @@ export function ConsultationSummary({
             <div>
               <strong>{item.productNameSnapshot}</strong>
               <span>{item.quantity}{item.unit}</span>
-              <span>{getUnavailableReasonLabel(consultation.reason)}</span>
-              {consultation.note ? <small>補足: {consultation.note}</small> : null}
+              {isFreeQuestion(consultation) ? (
+                <span>質問: {consultation.note}</span>
+              ) : (
+                <>
+                  <span>{getUnavailableReasonLabel(consultation.reason)}</span>
+                  {consultation.note ? <small>補足: {consultation.note}</small> : null}
+                </>
+              )}
               <small>
                 {consultation.status === 'queued'
                   ? 'まとめ相談に追加済み'

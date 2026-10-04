@@ -5,6 +5,7 @@ import {
   buildIndividualConsultationMessage,
   buildShoppingResultMessage,
   getUnavailableReasonLabel,
+  isFreeQuestion,
 } from './shoppingMessages'
 
 const createItem = (
@@ -67,14 +68,26 @@ describe('consultation messages', () => {
     expect(message).not.toContain('条件：')
   })
 
-  it('includes a trimmed note for other reasons', () => {
+  it('shares a note-only question without an invented situation or request', () => {
     const item = createItem('fish', '魚', 1, 'パック')
-    expect(
-      buildIndividualConsultationMessage(item, {
+    const message = buildIndividualConsultationMessage(item, {
         reason: 'other',
-        note: '  予算を超えています  ',
-      }),
-    ).toContain('状況：その他\n補足：予算を超えています')
+        note: '  これでいい？  ',
+      })
+    expect(message).toBe('【おつかい相談】\n\n商品：魚\n数量：1パック\n\nこれでいい？')
+    expect(message).not.toMatch(/状況：|補足：|別の商品でよいですか/)
+  })
+
+  it('keeps structured and free questions distinct in a mixed bulk share', () => {
+    const message = buildBulkConsultationMessage([
+      { item: createItem('apple', 'りんご', 1, '玉', '国産'), issue: { reason: 'other', note: 'これでいい？' } },
+      { item: createItem('milk', '牛乳', 1, '本'), issue: { reason: 'soldOut', note: '小さいサイズはあり' } },
+    ])
+    expect(message).toContain('・りんご 1玉\n  条件：国産\n  これでいい？')
+    expect(message).toContain('・牛乳 1本\n  状況：売り切れ\n  補足：小さいサイズはあり')
+    expect(message).not.toContain('状況：その他')
+    expect(isFreeQuestion({ reason: 'other', note: '  ' })).toBe(false)
+    expect(isFreeQuestion()).toBe(false)
   })
 
   it('builds a bulk message for multiple consulting items', () => {
@@ -100,6 +113,9 @@ describe('consultation messages', () => {
 })
 
 describe('shopping result messages', () => {
+  it('retains the explicit notBuying reason even when other has a note', () => {
+    expect(buildShoppingResultMessage(0, [{ item: createItem('apple', 'りんご', 1, '玉'), issue: { reason: 'other', note: '高すぎる' } }])).toContain('理由：その他\n  補足：高すぎる')
+  })
   it('omits an unavailable item list when every item was purchased', () => {
     expect(buildShoppingResultMessage(24, [])).toBe(`【おつかい結果】
 

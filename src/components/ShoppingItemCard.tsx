@@ -8,6 +8,7 @@ import type {
 import {
   getItemIssueLabel,
   getUnavailableReasonLabel,
+  isFreeQuestion,
 } from '../utils/shoppingMessages'
 import { hasCondition } from '../utils/shoppingState'
 
@@ -39,9 +40,7 @@ function getStatusLabel(status: CheckedItemStatus): string {
 }
 
 function getCartButtonLabel(item: ShoppingRequestItemPayload): string {
-  return item.quantity >= 2
-    ? `${item.quantity}${item.unit}をかごに入れる`
-    : 'かごに入れる'
+  return `${item.quantity}${item.unit}をかごに入れる`
 }
 
 export function ShoppingItemCard({
@@ -71,7 +70,12 @@ export function ShoppingItemCard({
       <span className="shopping-body">
         <span className="shopping-title-row">
           <strong>{item.productNameSnapshot}</strong>
-          {conditionItem ? <span className="condition-badge">条件あり</span> : null}
+          <span
+            className="shopping-quantity-block"
+            aria-label={`必要数量 ${item.quantity}${item.unit}`}
+          >
+            {item.quantity}{item.unit}
+          </span>
           {unresolvedConsultation ? (
             <span className="consultation-badge">
               {consultation.status === 'queued'
@@ -80,9 +84,9 @@ export function ShoppingItemCard({
             </span>
           ) : null}
         </span>
+        {item.memo ? <span className="shopping-condition">条件: {item.memo}</span> : null}
         {changeNotice}
         {photoContent}
-        {item.memo ? <span className="shopping-condition">条件: {item.memo}</span> : null}
         {effectiveStatus === 'notBuying' ? (
           <span className="shopping-issue">
             理由: {getItemIssueLabel(issue)}
@@ -91,20 +95,18 @@ export function ShoppingItemCard({
         ) : null}
         {unresolvedConsultation ? (
           <span className="shopping-consultation">
-            相談内容: {getUnavailableReasonLabel(consultation.reason)}
-            {consultation.note ? <small>補足: {consultation.note}</small> : null}
+            {isFreeQuestion(consultation) ? (
+              `質問: ${consultation.note}`
+            ) : (
+              <>
+                相談内容: {getUnavailableReasonLabel(consultation.reason)}
+                {consultation.note ? <small>補足: {consultation.note}</small> : null}
+              </>
+            )}
           </span>
         ) : null}
         <span className="shopping-state">{getStatusLabel(status)}</span>
       </span>
-      <span
-        className={`shopping-quantity-block ${item.quantity > 1 ? 'is-multiple' : ''}`}
-        aria-label={`必要数量 ${item.quantity}${item.unit}`}
-      >
-        <strong>{item.quantity >= 2 ? `×${item.quantity}` : item.quantity}</strong>
-        <small>{item.unit}</small>
-      </span>
-
       <span className="shopping-actions">
         {effectiveStatus === 'pending' ? (
           <button
@@ -135,9 +137,9 @@ export function ShoppingItemCard({
           className="secondary-button shopping-secondary-button"
           onClick={onOpenConsultation}
           disabled={isConsultationLocked}
-          aria-label={`${item.productNameSnapshot}について相談する`}
+          aria-label={`${item.productNameSnapshot}について質問・買わない`}
         >
-          相談する
+          質問・買わない
         </button>
 
         {effectiveStatus !== 'pending' ? (

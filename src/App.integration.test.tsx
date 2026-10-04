@@ -243,9 +243,9 @@ describe('mounted App hash routing', () => {
     await renderApp()
     await changeHash(`/l/${PUBLISHED_V3_REQUEST_FIXTURE}`)
 
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     expect(container.textContent).toContain('元に戻す')
-    await clickAndFlush(buttons('相談する')[0])
+    await clickAndFlush(buttons('質問・買わない')[0])
     expect(container.querySelector('[role="dialog"]')).not.toBeNull()
 
     const requestB = decodeCompactRequestV3(REQUEST_B_FIXTURE)
@@ -357,7 +357,7 @@ describe('mounted App hash routing', () => {
     const share = window.navigator.share as ReturnType<typeof vi.fn>
 
     await renderApp(true)
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     await clickAndFlush(button('買い物を終了する'))
     await clickAndFlush(button('結果を共有'))
 
