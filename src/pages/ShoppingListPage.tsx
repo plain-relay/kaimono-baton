@@ -175,6 +175,11 @@ export function ShoppingListPage({
   const [isCheckingCheckout, setIsCheckingCheckout] = useState(false)
   const [showOfflineFinishChoice, setShowOfflineFinishChoice] = useState(false)
   const checkoutCheckRef = useRef(false)
+  const liveUndoContextRef = useRef<{
+    change: ShoppingStateChange
+    itemSnapshot: string
+    hadPendingChange: boolean
+  }>()
   const {
     undoNotice,
     showUndoNotice,
@@ -444,6 +449,15 @@ export function ShoppingListPage({
     setShareNotice(null)
     const changedItem = payload?.items.find((item) => item.id === itemId)
     if (changedItem) {
+      const current = liveSync.getCurrentState()
+      const latestItem = current.snapshot
+        ? liveRequestToShoppingPayload(current.snapshot).items.find((item) => item.id === itemId)
+        : undefined
+      liveUndoContextRef.current = liveRequestToken ? {
+        change,
+        itemSnapshot: latestItem ? confirmationSnapshot(latestItem) : '',
+        hadPendingChange: current.pendingChanges.some((pending) => pending.itemId === itemId),
+      } : undefined
       showUndoNotice({
         change,
         message: getUndoNoticeMessage(changedItem, change),
@@ -572,8 +586,25 @@ export function ShoppingListPage({
       return
     }
     const { change: lastChange, previousCartOrder } = currentUndoNotice
-
-    undoShoppingChange(lastChange, previousCartOrder)
+    const liveUndoContext = liveUndoContextRef.current
+    liveUndoContextRef.current = undefined
+    const current = liveSync.getCurrentState()
+    const latestItem = current.snapshot
+      ? liveRequestToShoppingPayload(current.snapshot).items.find((item) => item.id === lastChange.itemId)
+      : undefined
+    const needsReconfirmation = Boolean(liveRequestToken) &&
+      liveUndoContext?.change === lastChange &&
+      (lastChange.previousStatus === 'inCart' || lastChange.previousStatus === 'verified') &&
+      (liveUndoContext.hadPendingChange || !latestItem ||
+        confirmationSnapshot(latestItem) !== liveUndoContext.itemSnapshot)
+    if (needsReconfirmation) {
+      // Undo the decision without resurrecting a cart check for older contents.
+      undoShoppingChange({ ...lastChange, previousStatus: 'pending', previousIssue: undefined },
+        previousCartOrder.filter((itemId) => itemId !== lastChange.itemId))
+      setShareNotice({ kind: 'info', message: '依頼内容が変わっているため、未購入に戻しました。最新の数量・条件を確認してください。' })
+    } else {
+      undoShoppingChange(lastChange, previousCartOrder)
+    }
     setCartConfirmation((current) =>
       current?.itemId === lastChange.itemId ? null : current,
     )

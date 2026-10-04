@@ -25,6 +25,8 @@
    choice, and never bypasses known outstanding changes or unresolved items.
 6. Acknowledging one item cannot clear another item or a newer revision, survives
    reload, and remains conservative when cache persistence fails.
+7. Undo cannot resurrect an older cart confirmation after a changed item is
+   declined or its update is acknowledged. Unchanged live/fixed Undo still works.
 
 ## Scope and invariants
 

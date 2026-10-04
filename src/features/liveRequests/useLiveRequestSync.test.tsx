@@ -277,6 +277,26 @@ describe('useLiveRequestSync', () => {
     }
   })
 
+  it('does not acknowledge a later change using an added item creation revision', async () => {
+    await mount()
+    const added = snapshot(2, 1)
+    added.items[0].updatedRevision = 1
+    added.items.push({ ...added.items[0], itemId: 'item-2', productId: 'eggs',
+      createdRevision: 2, updatedRevision: 2 })
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 'found', request: added, etag: '"revision-2"' })
+    await act(async () => { await sync.refresh() })
+    const changed = { ...added, revision: 3, updatesCount: 2, items: [
+      added.items[0], { ...added.items[1], quantity: 3, updatedRevision: 3 },
+    ] }
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 'found', request: changed, etag: '"revision-3"' })
+    await act(async () => { await sync.refresh() })
+    expect(sync.pendingChanges).toEqual([expect.objectContaining({ kind: 'added', revision: 2 })])
+    act(() => sync.acknowledgeChanges('item-2', 2))
+    expect(sync.pendingChanges).toHaveLength(1)
+    act(() => sync.acknowledgeChanges('item-2', 3))
+    expect(sync.pendingChanges).toEqual([])
+  })
+
   it('times out a stalled check, preserves progress data and ignores its late response', async () => {
     await mount()
     let resolve!: (value: LiveRequestGetResult) => void

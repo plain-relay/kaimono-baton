@@ -243,6 +243,14 @@ export function useLiveRequestSync({
     if (!current.snapshot || !current.etag) {
       return
     }
+    // An unreviewed addition keeps its creation revision in pendingChanges,
+    // even if its quantity/condition subsequently changes. Bound the review
+    // against the current item as well as the reminder revision.
+    const latestItem = current.snapshot.items.find((item) => item.itemId === itemId)
+    if (itemId !== undefined && latestItem &&
+        latestItem.updatedRevision > (throughRevision ?? 0)) {
+      return
+    }
     const pendingChanges = current.pendingChanges.filter((change) =>
       itemId !== undefined &&
       (change.itemId !== itemId || change.revision > (throughRevision ?? 0)),
