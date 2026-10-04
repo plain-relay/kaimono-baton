@@ -18,6 +18,7 @@ import {
 import { createId } from '../utils/id'
 import {
   createEmptyDraftState,
+  createDraftState,
   createRequestContentSnapshot,
   createInitialCreateRequestState,
   hasAnyCreateRequestInput,
@@ -495,6 +496,7 @@ export function CreateRequestPage({
   const hasResettableInput = useMemo(
     () =>
       pendingPhotos.photos.length > 0 ||
+      Object.values(draft).some((item) => item.memo.trim().length > 0) ||
       hasAnyCreateRequestInput({
         title: FIXED_REQUEST_TITLE,
         defaultTitle: FIXED_REQUEST_TITLE,
@@ -1136,17 +1138,10 @@ export function CreateRequestPage({
     setMode('edit')
   }
 
-  const handleReset = () => {
-    if (
-      hasResettableInput &&
-      !window.confirm('入力内容をすべて消去しますか？')
-    ) {
-      return
-    }
-
-    const emptyDraft = createEmptyDraftState(effectiveProducts)
-    setDraft(emptyDraft)
-    saveCreateDraft(emptyDraft)
+  const resetRequest = (nextDraft: CreateDraftState) => {
+    setDraft(nextDraft)
+    saveCreateDraft(nextDraft)
+    clearCreateRequestReturnState()
     setExpandedProductIds(new Set())
     setMode('edit')
     setSharedUrl('')
@@ -1166,6 +1161,34 @@ export function CreateRequestPage({
     setLiveRequestExpiresAt(undefined)
     setManagementCopyMessage('')
     closeCustomForm()
+  }
+
+  const handleStartNext = () => {
+    if (shareLockRef.current.isActive() || pendingPhotos.processingItemKey) {
+      return
+    }
+    if (
+      !window.confirm(
+        '今回の選択をリセットして、新しいリストを作ります。\n商品に登録されている初期条件は引き継ぎます。\n今回だけ追加した商品・写真は引き継ぎません。',
+      )
+    ) {
+      return
+    }
+    resetRequest(createDraftState(undefined, effectiveProducts))
+  }
+
+  const handleReset = () => {
+    if (shareLockRef.current.isActive() || pendingPhotos.processingItemKey) {
+      return
+    }
+    if (
+      hasResettableInput &&
+      !window.confirm('条件も含めて入力内容をすべて消去しますか？')
+    ) {
+      return
+    }
+
+    resetRequest(createEmptyDraftState(effectiveProducts))
   }
 
   const renderPhotoAttachment = (
@@ -1333,6 +1356,12 @@ export function CreateRequestPage({
       <CreateRequestBottomActions
         selectedCount={selectedCount}
         onReset={handleReset}
+        onStartNext={handleStartNext}
+        isBusy={
+          isSharingRequest ||
+          isUploadingPhotos ||
+          Boolean(pendingPhotos.processingItemKey)
+        }
         onReview={() => setMode('review')}
         reviewDisabled={Boolean(pendingPhotos.processingItemKey)}
         reviewDisabledMessage="写真の圧縮が終わるまでお待ちください。"

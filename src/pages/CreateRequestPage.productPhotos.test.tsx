@@ -54,6 +54,7 @@ describe('CreateRequestPage product photo sharing', () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
       true
     window.localStorage.clear()
+    vi.stubGlobal('confirm', vi.fn(() => true))
     window.history.replaceState({}, '', '/#/create')
     share = vi.fn(async () => undefined)
     revokePreviewUrl = vi.fn()
@@ -205,6 +206,30 @@ describe('CreateRequestPage product photo sharing', () => {
 
     expect(upload).not.toHaveBeenCalled()
     expect(sharedPayload().requestId).toMatch(/^v3-/)
+  })
+
+  it('discards only the current photo preview when starting the next list', async () => {
+    await renderPage()
+    await selectMilkPhoto()
+    expect(container.querySelector('img[alt="牛乳の参考写真プレビュー"]')).not.toBeNull()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await click(button('次の買い物リストを作る'))
+    expect(revokePreviewUrl).not.toHaveBeenCalled()
+    confirm.mockReturnValue(true)
+    await click(button('次の買い物リストを作る'))
+    expect(revokePreviewUrl).toHaveBeenCalledWith('blob:compressed-preview')
+    expect(container.querySelector('img[alt="牛乳の参考写真プレビュー"]')).toBeNull()
+    expect(JSON.parse(window.localStorage.getItem('otsukai:createDraft')!).milk.quantity).toBe(0)
+  })
+
+  it('blocks both reset actions until photo processing finishes', async () => {
+    let finishProcessing: (photo: ProcessedProductPhoto) => void = () => {}
+    await renderPage({ processPhoto: () => new Promise((resolve) => { finishProcessing = resolve }) })
+    await selectMilkPhoto()
+    expect(button('次の買い物リストを作る').disabled).toBe(true)
+    expect(button('条件も含めてすべて消去').disabled).toBe(true)
+    await act(async () => { finishProcessing(processedPhoto()); await Promise.resolve() })
+    expect(button('次の買い物リストを作る').disabled).toBe(false)
   })
 
   it('does not put the validation capability on a photo-free v3 share', async () => {

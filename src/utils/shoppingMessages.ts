@@ -33,12 +33,28 @@ function getTrimmedIssueNote(issue?: ItemIssue): string {
   return issue?.note?.trim() ?? ''
 }
 
+// Note-only questions use the existing other + note persisted representation.
+export function isFreeQuestion(issue?: ItemIssue): boolean {
+  return issue?.reason === 'other' && Boolean(getTrimmedIssueNote(issue))
+}
+
 export function buildIndividualConsultationMessage(
   item: ShoppingRequestItemPayload,
   issue?: ItemIssue,
 ): string {
   const condition = getTrimmedCondition(item)
   const note = getTrimmedIssueNote(issue)
+  if (isFreeQuestion(issue)) {
+    return [
+      '【おつかい相談】',
+      '',
+      `商品：${item.productNameSnapshot}`,
+      `数量：${item.quantity}${item.unit}`,
+      ...(condition ? [`条件：${condition}`] : []),
+      '',
+      note,
+    ].join('\n')
+  }
   const details = [
     `商品：${item.productNameSnapshot}`,
     `数量：${item.quantity}${item.unit}`,
@@ -57,9 +73,9 @@ export function buildBulkConsultationMessage(entries: ShoppingItemIssueEntry[]):
 
     return [
       `・${item.productNameSnapshot} ${item.quantity}${item.unit}`,
-      `  状況：${getItemIssueLabel(issue)}`,
+      ...(!isFreeQuestion(issue) ? [`  状況：${getItemIssueLabel(issue)}`] : []),
       ...(condition ? [`  条件：${condition}`] : []),
-      ...(note ? [`  補足：${note}`] : []),
+      ...(note ? [isFreeQuestion(issue) ? `  ${note}` : `  補足：${note}`] : []),
     ].join('\n')
   })
 

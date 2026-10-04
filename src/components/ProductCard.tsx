@@ -94,6 +94,10 @@ export function ProductCard({
         </button>
       </div>
 
+      {isSelected && hasCondition && !isExpanded ? (
+        <p className="product-condition-summary">条件: {draft.memo}</p>
+      ) : null}
+
       {draft.quantity >= MAX_ITEM_QUANTITY ? (
         <p className="quantity-limit-message" role="status">
           数量は20個までです。

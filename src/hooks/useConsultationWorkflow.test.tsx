@@ -157,6 +157,45 @@ describe('useConsultationWorkflow', () => {
     })
   })
 
+  it('queues a trimmed note-only question but does not authorize notBuying', () => {
+    act(() => {
+      workflow.openConsultation('milk')
+      workflow.setNote('  これでいい？  ')
+    })
+    expect(workflow.getDraftIssue()).toBeNull()
+    act(() => workflow.addToQueue())
+    expect(consultations.milk).toMatchObject({ reason: 'other', note: 'これでいい？', status: 'queued' })
+    act(() => workflow.openConsultation('milk'))
+    expect(workflow.consultationDraft).toMatchObject({ reason: undefined, note: 'これでいい？' })
+    act(() => workflow.setReason('soldOut'))
+    expect(workflow.getDraftIssue()?.issue.reason).toBe('soldOut')
+    act(() => workflow.setReason(undefined))
+    expect(workflow.getDraftIssue()).toBeNull()
+  })
+
+  it.each(['shared', 'copied', 'cancelled', 'failed'] as const)('preserves a free question through %s sharing', async (result) => {
+    shareMock.mockResolvedValue(result)
+    act(() => {
+      workflow.openConsultation('milk')
+      workflow.setNote('これでいい？')
+    })
+    await act(async () => workflow.shareDraftImmediately())
+    expect(shareMock.mock.calls[0]?.[0].text).toContain('これでいい？')
+    expect(shareMock.mock.calls[0]?.[0].text).not.toMatch(/状況：その他|別の商品でよいですか/)
+    expect(consultations.milk).toMatchObject({ reason: 'other', note: 'これでいい？', status: result === 'shared' || result === 'copied' ? 'shared' : 'queued' })
+  })
+
+  it('rejects a whitespace-only question for sharing and queueing', async () => {
+    act(() => {
+      workflow.openConsultation('milk')
+      workflow.setNote('  \n ')
+      workflow.addToQueue()
+    })
+    await act(async () => workflow.shareDraftImmediately())
+    expect(shareMock).not.toHaveBeenCalled()
+    expect(consultations).toEqual({})
+  })
+
   it('restores an existing consultation and falls back to a legacy item issue', () => {
     consultations.milk = {
       itemId: 'milk',

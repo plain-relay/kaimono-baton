@@ -200,9 +200,40 @@ describe('ShoppingListPage buyer flow', () => {
   }
 
   async function openConsultation(reason = 'soldOut') {
-    await clickAndFlush(button('相談する'))
+    await clickAndFlush(button('質問・買わない'))
     await selectReason(reason)
   }
+
+  it('shares a question without a reason, restores it, and keeps checkout unresolved until explicitly resolved', async () => {
+    const share = vi.fn(async (_data: ShareData) => undefined)
+    setNavigatorShare(share)
+    const { encoded, payload } = createRequest()
+    const item = payload.items[0]
+    await renderRequest(encoded)
+    await clickAndFlush(button('質問・買わない'))
+    expect(button('LINEで質問する').disabled).toBe(true)
+    const input = container.querySelector<HTMLInputElement>(`input[aria-label="${item.productNameSnapshot}への質問・伝えたいこと"]`)!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'これでいい？')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(button('LINEで質問する').disabled).toBe(false)
+    expect(button('今回は買わない').disabled).toBe(true)
+    expect(container.querySelectorAll('input[type="radio"]:checked')).toHaveLength(0)
+    await clickAndFlush(button('LINEで質問する'))
+    expect(share.mock.calls[0][0].text).toContain('これでいい？')
+    expect(share.mock.calls[0][0].text).not.toMatch(/状況：その他|補足：|別の商品でよいですか/)
+    await remountRequest(encoded)
+    expect(container.textContent).toContain('質問: これでいい？')
+    expect(container.textContent).toContain('共有操作済み')
+    await clickAndFlush(button('1個をかごに入れる'))
+    expect(buttons('買い物を終了する')).toHaveLength(0)
+    await clickAndFlush(button('相談を解決'))
+    expect(readConsultations(payload.requestId)[item.id].status).toBe('resolved')
+    expect(readCheckedState(payload.requestId)[item.id]).toBe('inCart')
+    expect(button('買い物を終了する')).toBeDefined()
+  })
 
   function createDeferredNativeShare() {
     let resolveShare: () => void = () => {}
@@ -241,7 +272,7 @@ describe('ShoppingListPage buyer flow', () => {
     const { encoded, payload } = createRequest()
     await renderRequest(encoded)
 
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
 
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(readCheckedState(payload.requestId)[payload.items[0].id]).toBe('inCart')
@@ -252,7 +283,7 @@ describe('ShoppingListPage buyer flow', () => {
     const { encoded, payload } = createRequest([{ quantity: 2 }])
     await renderRequest(encoded)
 
-    expect(container.textContent).toContain('×2')
+    expect(container.querySelector('.shopping-quantity-block')?.textContent).toBe('2個')
     await clickAndFlush(button('2個をかごに入れる'))
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]')
     expect(dialog?.textContent).toContain('数量の確認')
@@ -275,7 +306,7 @@ describe('ShoppingListPage buyer flow', () => {
     const { encoded, payload } = createRequest([{ memo: condition }])
     await renderRequest(encoded)
 
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]')
     expect(dialog?.textContent).not.toContain('数量の確認')
     expect(dialog?.textContent).toContain('条件の確認')
@@ -341,7 +372,7 @@ describe('ShoppingListPage buyer flow', () => {
     const { encoded, payload } = createRequest([{ memo: '国産' }])
     const item = payload.items[0]
     await renderRequest(encoded)
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     const consultationButton = [
       ...container.querySelectorAll<HTMLButtonElement>(
         '[role="dialog"] button',
@@ -351,7 +382,7 @@ describe('ShoppingListPage buyer flow', () => {
     await clickAndFlush(consultationButton!)
 
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
-      `${item.productNameSnapshot}について相談する`,
+      `${item.productNameSnapshot}について質問・買わない`,
     )
     expect(readCheckedState(payload.requestId)[item.id]).toBeUndefined()
   })
@@ -391,9 +422,9 @@ describe('ShoppingListPage buyer flow', () => {
     const [first, second] = payload.items
     await renderRequest(encoded)
 
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     act(() => vi.advanceTimersByTime(4_000))
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     expect(container.textContent).toContain(
       `${second.productNameSnapshot}をかご済みにしました`,
     )
@@ -411,7 +442,7 @@ describe('ShoppingListPage buyer flow', () => {
     const firstRequest = createRequest([{}], 'first-request')
     const secondRequest = createRequest([{}], 'second-request')
     await renderRequest(firstRequest.encoded)
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     expect(button('元に戻す')).toBeDefined()
 
     await renderRequest(secondRequest.encoded)
@@ -473,7 +504,7 @@ describe('ShoppingListPage buyer flow', () => {
     )
     await renderRequest(encoded)
 
-    expect(buttons('相談する')).toHaveLength(6)
+    expect(buttons('質問・買わない')).toHaveLength(6)
   })
 
   it('shares one item immediately without changing its cart state', async () => {
@@ -521,8 +552,8 @@ describe('ShoppingListPage buyer flow', () => {
     act(() => click(button('LINEですぐ相談')))
     expect(deferred.share).toHaveBeenCalledTimes(1)
     await clickAndFlush(button('戻る'))
-    expect(button('かごに入れる').disabled).toBe(false)
-    await clickAndFlush(button('かごに入れる'))
+    expect(button('1個をかごに入れる').disabled).toBe(false)
+    await clickAndFlush(button('1個をかごに入れる'))
     expect(readCheckedState(payload.requestId)[item.id]).toBe('inCart')
     await deferred.resolve()
     expect(readCheckedState(payload.requestId)[item.id]).toBe('inCart')
@@ -990,7 +1021,7 @@ describe('ShoppingListPage buyer flow', () => {
 
     const retryShare = vi.fn(async (_data: ShareData) => undefined)
     setNavigatorShare(retryShare)
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     await clickAndFlush(button('買い物を終了する'))
     await clickAndFlush(button('結果を共有'))
 
@@ -1187,7 +1218,7 @@ describe('ShoppingListPage buyer flow', () => {
       },
     )
 
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
 
     expect(container.textContent).toContain('かご済み')
     expect(container.textContent).toContain(
@@ -1220,7 +1251,7 @@ describe('ShoppingListPage buyer flow', () => {
       },
     )
 
-    await clickAndFlush(button('かごに入れる'))
+    await clickAndFlush(button('1個をかごに入れる'))
     expect(container.textContent).toContain('かご済み')
 
     act(() => root.unmount())
@@ -1229,7 +1260,7 @@ describe('ShoppingListPage buyer flow', () => {
     rootIsMounted = true
     await renderRequest(encoded)
 
-    expect(button('かごに入れる').disabled).toBe(false)
+    expect(button('1個をかごに入れる').disabled).toBe(false)
     expect(container.textContent).not.toContain('キャベツをかご済みにしました')
     expect(warn).toHaveBeenCalled()
   })
