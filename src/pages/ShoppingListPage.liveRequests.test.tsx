@@ -142,6 +142,39 @@ describe('ShoppingListPage live request synchronization', () => {
     ) as Record<string, string>
   }
 
+  function serveLatest(next: LiveRequestSnapshot) {
+    vi.mocked(api.get).mockImplementation(async (_, options) =>
+      options?.etag === `"revision-${next.revision}"`
+        ? { status: 'not-modified', etag: `"revision-${next.revision}"` }
+        : { status: 'found', request: next, etag: `"revision-${next.revision}"` },
+    )
+  }
+
+  function reviewButton(): HTMLButtonElement {
+    return container.querySelector<HTMLButtonElement>('button[aria-label="牛乳の変更内容を確認"]')!
+  }
+
+  async function confirmDialog() {
+    const dialog = container.querySelector('[role="dialog"]')!
+    for (const checkbox of dialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (!checkbox.checked) await click(checkbox)
+    }
+    const confirm = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(
+      (candidate) => candidate.textContent?.includes('かご済みにする'),
+    )!
+    expect(confirm.disabled).toBe(false)
+    await click(confirm)
+  }
+
+  async function focusRefresh() {
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
   it('shows additions and changes while preserving in-cart progress', async () => {
     await renderPage()
     expect(container.textContent).toContain('牛乳')
@@ -231,5 +264,216 @@ describe('ShoppingListPage live request synchronization', () => {
     expect(container.textContent).toContain('写真を取得できませんでした')
     expect(container.textContent).toContain('牛乳')
     expect(button('1本をかごに入れる').disabled).toBe(false)
+  })
+
+  it('requires the latest quantity even when a previously verified item changes to one', async () => {
+    serveLatest(snapshot({ memo: '低脂肪' }))
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    await confirmDialog()
+    expect(storedProgress()['item-1']).toBe('verified')
+
+    serveLatest(snapshot({ revision: 2, quantity: 1, memo: '無脂肪' }))
+    await click(button('更新を確認'))
+    await click(button('会計前チェックへ'))
+    expect(button('買い物を終了する').disabled).toBe(true)
+    await click(reviewButton())
+    expect(container.querySelectorAll('[role="dialog"] input[type="checkbox"]')).toHaveLength(2)
+    await confirmDialog()
+    expect(container.textContent).not.toContain('未確認の変更が')
+    await click(button('買い物を終了する'))
+    expect(container.textContent).toContain('おつかい完了')
+  })
+
+  it('does not let a quantity-only update reuse the cart state without checking', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    serveLatest(snapshot({ revision: 2, quantity: 3 }))
+    await click(button('更新を確認'))
+    await click(button('会計前チェックへ'))
+    expect(button('買い物を終了する').disabled).toBe(true)
+    await click(reviewButton())
+    expect(button('3本をかご済みにする').disabled).toBe(true)
+    await confirmDialog()
+    expect(storedProgress()['item-1']).toBe('inCart')
+    expect(button('買い物を終了する').disabled).toBe(false)
+  })
+
+  it('invalidates a checked dialog when its quantity or condition changes', async () => {
+    serveLatest(snapshot({ quantity: 2, memo: '低脂肪' }))
+    await renderPage()
+    await click(button('2本をかごに入れる'))
+    for (const checkbox of container.querySelectorAll<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')) {
+      await click(checkbox)
+    }
+    serveLatest(snapshot({ revision: 2, quantity: 3, memo: '無脂肪' }))
+    await focusRefresh()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(storedProgress()['item-1']).toBeUndefined()
+    await click(button('3本をかごに入れる'))
+    expect(button('確認してかご済みにする').disabled).toBe(true)
+    await confirmDialog()
+    expect(storedProgress()['item-1']).toBe('verified')
+  })
+
+  it('invalidates a checked dialog on requester cancellation', async () => {
+    serveLatest(snapshot({ quantity: 2 }))
+    await renderPage()
+    await click(button('2本をかごに入れる'))
+    await click(container.querySelector('[role="dialog"] input[type="checkbox"]')!)
+    serveLatest(snapshot({ revision: 2, quantity: 2, lifecycle: 'cancelled-by-requester' }))
+    await focusRefresh()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(storedProgress()['item-1']).toBeUndefined()
+  })
+
+  it('keeps confirmation checks for an unrelated addition and retains that new item reminder', async () => {
+    const original = snapshot({ quantity: 2 })
+    serveLatest(original)
+    await renderPage()
+    await click(button('2本をかごに入れる'))
+    await click(container.querySelector('[role="dialog"] input[type="checkbox"]')!)
+    const next = { ...original, revision: 2, updatesCount: 1, items: [
+      original.items[0], { ...original.items[0], itemId: 'item-2', productId: 'eggs',
+        productNameSnapshot: '卵', quantity: 1, createdRevision: 2, updatedRevision: 2 },
+    ] }
+    serveLatest(next)
+    await focusRefresh()
+    expect(container.querySelector<HTMLInputElement>('[role="dialog"] input')!.checked).toBe(true)
+    await confirmDialog()
+    expect(container.textContent).toContain('未確認の変更が1件')
+    expect(storedProgress()['item-1']).toBe('inCart')
+  })
+
+  it('checks for new items when entering checkout and again immediately before finishing', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    serveLatest(snapshot())
+    await click(button('会計前チェックへ'))
+    expect(api.get).toHaveBeenCalledTimes(2)
+    const next = snapshot({ revision: 2 })
+    next.items[0].updatedRevision = 1
+    next.items.push({ ...next.items[0], itemId: 'item-2', productId: 'eggs',
+      productNameSnapshot: '卵', createdRevision: 2, updatedRevision: 2 })
+    serveLatest(next)
+    await click(button('買い物を終了する'))
+    expect(container.textContent).not.toContain('おつかい完了')
+    expect(container.textContent).toContain('卵')
+    expect(container.textContent).toContain('未処理の商品')
+    expect(storedProgress()['item-1']).toBe('inCart')
+  })
+
+  it('requires explicit cancellation handling for a cart item before completing other purchases', async () => {
+    const original = snapshot()
+    original.items.push({ ...original.items[0], itemId: 'item-2', productId: 'eggs',
+      productNameSnapshot: '卵' })
+    serveLatest(original)
+    await renderPage()
+    const cartButtons = [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
+      (candidate) => candidate.textContent === '1本をかごに入れる',
+    )
+    await click(cartButtons[0])
+    await click(cartButtons[1])
+    serveLatest({ ...original, revision: 2, updatesCount: 1, items: [
+      { ...original.items[0], lifecycle: 'cancelled-by-requester', cancelledRevision: 2, updatedRevision: 2 },
+      original.items[1],
+    ] })
+    await click(button('会計前チェックへ'))
+    expect(button('買い物を終了する').disabled).toBe(true)
+    await click(button('取消への対応を確認しました'))
+    expect(storedProgress()['item-1']).toBe('inCart')
+    await click(button('買い物を終了する'))
+    expect(container.textContent).toContain('おつかい完了')
+  })
+
+  it('retains unresolved updates and cart progress after reload', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    serveLatest(snapshot({ revision: 2, quantity: 2 }))
+    await click(button('更新を確認'))
+    act(() => root.unmount())
+    root = createRoot(container)
+    await renderPage()
+    expect(container.textContent).toContain('数量 1 → 2')
+    expect(storedProgress()['item-1']).toBe('inCart')
+    await click(button('会計前チェックへ'))
+    expect(button('買い物を終了する').disabled).toBe(true)
+  })
+
+  it('keeps cart updates actionable under the remaining-only filter and never offers an offline bypass', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    await click(button('未購入・相談中だけ表示'))
+    serveLatest(snapshot({ revision: 2, quantity: 2 }))
+    await click(button('更新を確認'))
+    expect(container.textContent).toContain('表示できる商品がありません')
+    expect(reviewButton()).not.toBeNull()
+    vi.mocked(api.get).mockRejectedValue(new Error('offline'))
+    await click(button('会計前チェックへ'))
+    expect(button('買い物を終了する').disabled).toBe(true)
+    expect(container.textContent).not.toContain('最新未確認のまま保存済みのリストで終了する')
+    await click(reviewButton())
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
+  it('requires quantity reconfirmation after a condition is removed from an already verified item', async () => {
+    serveLatest(snapshot({ memo: '低脂肪' }))
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    await confirmDialog()
+    serveLatest(snapshot({ revision: 2 }))
+    await click(button('更新を確認'))
+    await click(reviewButton())
+    expect(container.querySelectorAll('[role="dialog"] input[type="checkbox"]')).toHaveLength(1)
+    expect(button('1本をかご済みにする').disabled).toBe(true)
+    await confirmDialog()
+    expect(container.textContent).not.toContain('未確認の変更が')
+  })
+
+  it('requires an explicit offline finish choice without erasing the snapshot or claiming freshness', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    vi.mocked(api.get).mockRejectedValue(new Error('offline'))
+    await click(button('会計前チェックへ'))
+    expect(container.textContent).toContain('最新状態を確認できません')
+    expect(container.textContent).not.toContain('最新未確認のまま保存済みのリストで終了する')
+    await click(button('買い物を終了する'))
+    expect(container.textContent).not.toContain('おつかい完了')
+    await click(button('最新未確認のまま保存済みのリストで終了する'))
+    expect(container.textContent).toContain('おつかい完了')
+    expect(container.textContent).toContain('最新の依頼は未確認です')
+    expect(storedProgress()['item-1']).toBe('inCart')
+  })
+
+  it('blocks the finish button and merges double clicks into one in-flight checkout check', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    serveLatest(snapshot())
+    await click(button('会計前チェックへ'))
+    let resolve!: (value: LiveRequestGetResult) => void
+    vi.mocked(api.get).mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const finish = button('買い物を終了する')
+    await act(async () => {
+      finish.click()
+      finish.click()
+      await Promise.resolve()
+    })
+    expect(api.get).toHaveBeenCalledTimes(3)
+    expect(button('買い物を終了する').disabled).toBe(true)
+    await act(async () => resolve({ status: 'not-modified', etag: '"revision-1"' }))
+    expect(container.textContent).toContain('おつかい完了')
+  })
+
+  it('returns from completion when a later request update arrives', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    serveLatest(snapshot())
+    await click(button('会計前チェックへ'))
+    await click(button('買い物を終了する'))
+    expect(container.textContent).toContain('おつかい完了')
+    serveLatest(snapshot({ revision: 2, quantity: 2 }))
+    await focusRefresh()
+    expect(container.textContent).not.toContain('おつかい完了')
+    expect(container.textContent).toContain('数量 1 → 2')
   })
 })

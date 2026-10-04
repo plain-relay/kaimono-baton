@@ -2366,6 +2366,21 @@ select:focus {
   font-size: 0.8rem;
 }
 
+.live-request-review {
+  border-color: #e0b16e;
+  overflow-wrap: anywhere;
+}
+
+.live-request-review h2 {
+  font-size: 1.05rem;
+}
+
+.live-request-review .live-request-cancelled-list li {
+  gap: 0.45rem;
+  border-color: #e0b16e;
+  background: #fff6e6;
+}
+
 .live-request-turnstile {
   min-height: 1px;
 }

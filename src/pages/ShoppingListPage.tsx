@@ -60,6 +60,7 @@ import {
 import { ProductPhotoViewer } from '../features/productPhotos/ProductPhotoViewer'
 import type { LiveRequestApi } from '../features/liveRequests/types'
 import { useLiveRequestSync } from '../features/liveRequests/useLiveRequestSync'
+import { LiveRequestChangeReview } from '../features/liveRequests/LiveRequestChangeReview'
 import {
   cancelledItemMessage,
   describeLiveRequestChange,
@@ -83,6 +84,12 @@ type CartConfirmationState = {
   quantityConfirmed: boolean
   conditionConfirmed: boolean
   isConditionFollowUp: boolean
+  itemSnapshot: string
+  isLiveChangeReview: boolean
+}
+
+function confirmationSnapshot(item: ShoppingRequestItemPayload): string {
+  return JSON.stringify([item.id, item.quantity, item.memo ?? '', item.liveLifecycle, item.liveUpdatedRevision])
 }
 
 type ShareNotice = {
@@ -165,6 +172,9 @@ export function ShoppingListPage({
     useState<CartConfirmationState | null>(null)
   const [isCheckoutReviewOpen, setIsCheckoutReviewOpen] = useState(false)
   const [isCompletionView, setIsCompletionView] = useState(false)
+  const [isCheckingCheckout, setIsCheckingCheckout] = useState(false)
+  const [showOfflineFinishChoice, setShowOfflineFinishChoice] = useState(false)
+  const checkoutCheckRef = useRef(false)
   const {
     undoNotice,
     showUndoNotice,
@@ -375,24 +385,17 @@ export function ShoppingListPage({
       consultations: loadedSession.consultations,
     })
     loadedLiveRequestIdRef.current = nextPayload.requestId
-    setCartConfirmation((current) =>
-      current &&
-      nextPayload.items.some(
-        (item) =>
-          item.id === current.itemId &&
-          item.liveLifecycle !== 'cancelled-by-requester',
-      )
-        ? current
-        : null,
-    )
     if (!isExistingSession) {
+      setCartConfirmation(null)
       setFilterMode('all')
       setIsCheckoutReviewOpen(false)
       setIsCompletionView(false)
       setIsSharingResult(false)
       setShareNotice(null)
+      setShowOfflineFinishChoice(false)
       clearUndoNotice()
     } else if (liveSync.pendingChanges.length > 0) {
+      shouldPublishResultNoticeRef.current = false
       setIsCompletionView(false)
     }
   }, [
@@ -406,6 +409,18 @@ export function ShoppingListPage({
     onError,
     replaceSession,
   ])
+
+  useEffect(() => {
+    if (!liveRequestToken || !liveSync.snapshot || !cartConfirmation) return
+    const item = liveRequestToShoppingPayload(liveSync.snapshot).items.find(
+      (candidate) => candidate.id === cartConfirmation.itemId,
+    )
+    if (!item || item.liveLifecycle === 'cancelled-by-requester' ||
+        confirmationSnapshot(item) !== cartConfirmation.itemSnapshot) {
+      setCartConfirmation(null)
+      setShareNotice({kind: 'info', message: '確認中の商品が変更・取消されました。最新の内容を確認してください。'})
+    }
+  }, [cartConfirmation, liveRequestToken, liveSync.snapshot])
 
   const commitShoppingChange = (
     itemId: string,
@@ -445,12 +460,18 @@ export function ShoppingListPage({
     item: ShoppingRequestItemPayload,
     isConditionFollowUp = false,
   ) => {
+    const isLiveChangeReview = Boolean(liveRequestToken) &&
+      liveSync.getCurrentState().pendingChanges.some((change) =>
+        change.itemId === item.id,
+      ) && (getItemStatus(getCurrentShoppingState().checkedState, item.id) === 'inCart' ||
+        getItemStatus(getCurrentShoppingState().checkedState, item.id) === 'verified')
     const needsQuantityConfirmation =
-      !isConditionFollowUp && item.quantity >= 2
+      isLiveChangeReview || (!isConditionFollowUp && item.quantity >= 2)
     const needsConditionConfirmation = hasCondition(item)
 
     if (!needsQuantityConfirmation && !needsConditionConfirmation) {
       commitShoppingChange(item.id, 'inCart')
+      liveSync.acknowledgeChanges(item.id, item.liveUpdatedRevision)
       return
     }
 
@@ -463,12 +484,25 @@ export function ShoppingListPage({
       quantityConfirmed: false,
       conditionConfirmed: false,
       isConditionFollowUp,
+      itemSnapshot: confirmationSnapshot(item),
+      isLiveChangeReview,
     })
   }
 
   const handleConfirmCart = () => {
     if (!cartConfirmation) {
       return
+    }
+    if (liveRequestToken) {
+      const snapshot = liveSync.getCurrentState().snapshot
+      const item = snapshot ? liveRequestToShoppingPayload(snapshot).items.find(
+        (candidate) => candidate.id === cartConfirmation.itemId,
+      ) : undefined
+      if (!item || item.liveLifecycle === 'cancelled-by-requester' ||
+          confirmationSnapshot(item) !== cartConfirmation.itemSnapshot) {
+        setCartConfirmation(null)
+        return
+      }
     }
     if (
       (cartConfirmation.needsQuantityConfirmation &&
@@ -483,6 +517,9 @@ export function ShoppingListPage({
       cartConfirmation.itemId,
       cartConfirmation.needsConditionConfirmation ? 'verified' : 'inCart',
     )
+    const item = payload?.items.find((candidate) => candidate.id === cartConfirmation.itemId)
+    liveSync.acknowledgeChanges(cartConfirmation.itemId, item?.liveUpdatedRevision)
+    setCartConfirmation(null)
   }
 
   const handleOpenConsultation = (itemId: string) => {
@@ -502,10 +539,12 @@ export function ShoppingListPage({
       'notBuying',
       draftIssue.issue,
     )
+    const item = payload?.items.find((candidate) => candidate.id === draftIssue.itemId)
+    liveSync.acknowledgeChanges(draftIssue.itemId, item?.liveUpdatedRevision)
     closeConsultation()
   }
 
-  const handleOpenCheckoutReview = () => {
+  const handleOpenCheckoutReview = async () => {
     setIsCheckoutReviewOpen(true)
     window.requestAnimationFrame(() => {
       checkoutReviewRef.current?.focus()
@@ -514,6 +553,17 @@ export function ShoppingListPage({
         block: 'start',
       })
     })
+    if (liveRequestToken && !checkoutCheckRef.current) {
+      checkoutCheckRef.current = true
+      setIsCheckingCheckout(true)
+      setShowOfflineFinishChoice(false)
+      try {
+        await liveSync.refresh()
+      } finally {
+        checkoutCheckRef.current = false
+        setIsCheckingCheckout(false)
+      }
+    }
   }
 
   const handleUndo = () => {
@@ -566,9 +616,18 @@ export function ShoppingListPage({
     }
   }
 
-  const handleFinishShopping = () => {
+  const finishWithCurrentList = () => {
+    const current = liveSync.getCurrentState()
+    if (liveRequestToken && (current.pendingChanges.length > 0 ||
+        current.status === 'checking' || current.status === 'loading' ||
+        current.snapshot?.requestId !== payload?.requestId)) return
+    const latestItems = liveRequestToken && current.snapshot
+      ? liveRequestToShoppingPayload(current.snapshot).items.filter(
+          (item) => item.liveLifecycle !== 'cancelled-by-requester',
+        )
+      : sortedItems
     const latestCompletionState = getShoppingCompletionState(
-      sortedItems,
+      latestItems,
       getCurrentShoppingState().checkedState,
       getCurrentConsultations(),
     )
@@ -576,7 +635,9 @@ export function ShoppingListPage({
       return
     }
 
-    setShareNotice(null)
+    setShareNotice(liveRequestToken && current.status !== 'current'
+      ? { kind: 'info', message: '最新の依頼は未確認です。保存済みのリストで買い物を終了しました。' }
+      : null)
     setIsCompletionView(true)
     window.requestAnimationFrame(() => {
       completionHeadingRef.current?.focus()
@@ -584,18 +645,55 @@ export function ShoppingListPage({
     })
   }
 
+  const handleFinishShopping = async () => {
+    if (!liveRequestToken) {
+      finishWithCurrentList()
+      return
+    }
+    if (checkoutCheckRef.current) return
+    const expectedRequestId = payload?.requestId
+    checkoutCheckRef.current = true
+    setIsCheckingCheckout(true)
+    setShowOfflineFinishChoice(false)
+    try {
+      const current = await liveSync.refresh()
+      if (current.snapshot?.requestId !== expectedRequestId) return
+      if (current.pendingChanges.length > 0) {
+        setShareNotice({kind: 'info', message: '新しい変更があります。内容を確認してから終了してください。'})
+        return
+      }
+      if (current.status !== 'current') {
+        setShowOfflineFinishChoice(true)
+        return
+      }
+      finishWithCurrentList()
+    } finally {
+      checkoutCheckRef.current = false
+      setIsCheckingCheckout(false)
+    }
+  }
+
+  const handleReviewLiveChange = (itemId: string) => {
+    const current = liveSync.getCurrentState()
+    const item = current.snapshot ? liveRequestToShoppingPayload(current.snapshot).items.find(
+      (candidate) => candidate.id === itemId,
+    ) : undefined
+    if (!item) return
+    const status = getItemStatus(getCurrentShoppingState().checkedState, itemId)
+    if (item.liveLifecycle !== 'cancelled-by-requester' &&
+        (status === 'inCart' || status === 'verified') &&
+        current.pendingChanges.some((change) => change.itemId === itemId)) {
+      handleOpenCartConfirmation(item, true)
+    } else {
+      liveSync.acknowledgeChanges(itemId, item.liveUpdatedRevision)
+    }
+  }
+
   const handleReviewShopping = () => {
     shouldPublishResultNoticeRef.current = false
     setIsCompletionView(false)
-    setIsCheckoutReviewOpen(true)
     setShareNotice(null)
-    window.requestAnimationFrame(() => {
-      checkoutReviewRef.current?.focus()
-      checkoutReviewRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-    })
+    void handleOpenCheckoutReview()
   }
 
   if (!payload) {
@@ -639,7 +737,7 @@ export function ShoppingListPage({
 
   const showCheckoutReview =
     isCheckoutReviewOpen ||
-    (sortedItems.length > 0 && completionState.pendingCount === 0)
+    (!liveRequestToken && sortedItems.length > 0 && completionState.pendingCount === 0)
   const cartConfirmationItem = cartConfirmation
     ? sortedItems.find((item) => item.id === cartConfirmation.itemId)
     : undefined
@@ -696,24 +794,22 @@ export function ShoppingListPage({
             >
               {liveSync.status === 'checking' ? '確認中…' : '更新を確認'}
             </button>
-            {liveSync.pendingChanges.length > 0 ? (
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={liveSync.acknowledgeChanges}
-              >
-                変更を確認しました
-              </button>
-            ) : null}
           </div>
         </section>
+      ) : null}
+
+      {liveRequestToken ? (
+        <LiveRequestChangeReview changes={liveSync.pendingChanges} items={payload.items}
+          checkedState={checkedState} onReview={handleReviewLiveChange} />
       ) : null}
 
       <section className="hero-card compact-hero">
         <p className="eyebrow">残りの処理</p>
         <div className="remaining-count">{unresolvedCount}</div>
         <p className="lead">
-          {unresolvedCount > 0
+          {liveRequestToken && liveSync.pendingChanges.length > 0
+            ? '依頼の変更が未確認です。上の案内から対応してください。'
+            : unresolvedCount > 0
             ? '件の商品が未処理または未解決です'
             : 'すべての商品を確認できました'}
         </p>
@@ -724,7 +820,8 @@ export function ShoppingListPage({
             <button
               type="button"
               className="primary-button"
-              onClick={handleOpenCheckoutReview}
+              onClick={() => void handleOpenCheckoutReview()}
+              disabled={isCheckingCheckout}
             >
               会計前チェックへ
             </button>
@@ -888,8 +985,29 @@ export function ShoppingListPage({
           }}
           onEditConsultation={handleOpenConsultation}
           onResolveConsultation={handleResolveConsultation}
-          onFinishShopping={handleFinishShopping}
+          onFinishShopping={() => void handleFinishShopping()}
+          isFinishBlocked={Boolean(liveRequestToken) &&
+            (isCheckingCheckout || liveSync.status === 'checking' || liveSync.pendingChanges.length > 0)}
+          finishBlockMessage={liveRequestToken
+            ? isCheckingCheckout || liveSync.status === 'checking'
+              ? '会計前に最新の依頼内容を確認しています。'
+              : liveSync.pendingChanges.length > 0
+                ? '依頼の変更に対応してから終了してください。'
+                : '終了する前に、もう一度依頼の更新を確認します。'
+            : undefined}
         />
+      ) : null}
+
+      {liveRequestToken && showOfflineFinishChoice && showCheckoutReview &&
+        liveSync.status !== 'current' && liveSync.status !== 'checking' &&
+        liveSync.pendingChanges.length === 0 && completionState.canFinish ? (
+        <section className="info-card" aria-label="最新状態を確認できない場合の終了">
+          <p>最新の依頼を確認できませんでした。LINEなどで追加・変更がないか確認してください。
+            終了しても最新状態を確認済みにはなりません。</p>
+          <button type="button" className="secondary-button" onClick={finishWithCurrentList}>
+            最新未確認のまま保存済みのリストで終了する
+          </button>
+        </section>
       ) : null}
 
       {cartConfirmation && cartConfirmationItem ? (
@@ -904,6 +1022,7 @@ export function ShoppingListPage({
           quantityConfirmed={cartConfirmation.quantityConfirmed}
           conditionConfirmed={cartConfirmation.conditionConfirmed}
           isConditionFollowUp={cartConfirmation.isConditionFollowUp}
+          isLiveChangeReview={cartConfirmation.isLiveChangeReview}
           isPurchaseLocked={false}
           isConsultationLocked={isSharingConsultation}
           onQuantityConfirmedChange={(confirmed) =>

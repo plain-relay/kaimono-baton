@@ -85,7 +85,7 @@ export function useLiveRequestSync({
     initialState(enabled, requestToken, storage),
   )
   const stateRef = useRef(state)
-  const inFlightRef = useRef<Promise<void>>()
+  const inFlightRef = useRef<Promise<SyncState>>()
   const controllerRef = useRef<AbortController>()
   const mountedRef = useRef(true)
 
@@ -130,14 +130,18 @@ export function useLiveRequestSync({
     [now, requestToken, storage],
   )
 
-  const refresh = useCallback((): Promise<void> => {
+  const getCurrentState = useCallback(() => stateRef.current, [])
+
+  const refresh = useCallback((): Promise<SyncState> => {
     if (!enabled || !api) {
-      return Promise.resolve()
+      return Promise.resolve(stateRef.current)
     }
     if (inFlightRef.current) {
       return inFlightRef.current
     }
     const controller = new AbortController()
+    let timedOut = false
+    let timeout: number | undefined
     controllerRef.current = controller
     const current = stateRef.current
     commitState({
@@ -146,21 +150,31 @@ export function useLiveRequestSync({
     })
     const operation = (async () => {
       try {
-        const result = await api.get(requestToken, {
-          ...(current.etag ? { etag: current.etag } : {}),
-          signal: controller.signal,
+        const interrupted = new Promise<never>((_, reject) => {
+          controller.signal.addEventListener('abort', () => reject(new Error('interrupted')), { once: true })
+          timeout = window.setTimeout(() => {
+            timedOut = true
+            controller.abort()
+          }, 10_000)
         })
+        const result = await Promise.race([
+          api.get(requestToken, {
+            ...(current.etag ? { etag: current.etag } : {}),
+            signal: controller.signal,
+          }),
+          interrupted,
+        ])
         if (controller.signal.aborted || !mountedRef.current) {
-          return
+          return stateRef.current
         }
         const latest = stateRef.current
         if (result.status === 'not-modified') {
           commitState({ ...latest, etag: result.etag, status: 'current' })
-          return
+          return stateRef.current
         }
         if (result.status === 'expired') {
           commitState({ ...latest, status: 'expired' })
-          return
+          return stateRef.current
         }
         if (result.status === 'missing') {
           commitState({
@@ -171,14 +185,14 @@ export function useLiveRequestSync({
                 ? 'stale'
                 : 'missing',
           })
-          return
+          return stateRef.current
         }
         if (
           latest.snapshot &&
           result.request.revision < latest.snapshot.revision
         ) {
           commitState({ ...latest, status: 'stale' })
-          return
+          return stateRef.current
         }
         const pendingChanges = latest.snapshot
           ? diffLiveRequestSnapshots(
@@ -200,7 +214,7 @@ export function useLiveRequestSync({
           cachePersistenceFailed: !persisted,
         })
       } catch {
-        if (!controller.signal.aborted && mountedRef.current) {
+        if ((!controller.signal.aborted || timedOut) && mountedRef.current) {
           const latest = stateRef.current
           commitState({
             ...latest,
@@ -212,25 +226,33 @@ export function useLiveRequestSync({
           })
         }
       } finally {
+        window.clearTimeout(timeout)
         if (controllerRef.current === controller) {
           controllerRef.current = undefined
           inFlightRef.current = undefined
         }
       }
+      return stateRef.current
     })()
     inFlightRef.current = operation
     return operation
   }, [api, commitState, enabled, now, persist, requestToken])
 
-  const acknowledgeChanges = useCallback(() => {
+  const acknowledgeChanges = useCallback((itemId?: string, throughRevision?: number) => {
     const current = stateRef.current
     if (!current.snapshot || !current.etag) {
       return
     }
-    const persisted = persist(current.snapshot, current.etag, [])
+    const pendingChanges = current.pendingChanges.filter((change) =>
+      itemId !== undefined &&
+      (change.itemId !== itemId || change.revision > (throughRevision ?? 0)),
+    )
+    const persisted = persist(current.snapshot, current.etag, pendingChanges)
     commitState({
       ...current,
-      pendingChanges: [],
+      // Keep the reminder if it cannot be saved; a reload must not silently
+      // restore an update that the screen already claims has been dismissed.
+      pendingChanges: persisted ? pendingChanges : current.pendingChanges,
       cachePersistenceFailed: !persisted,
     })
   }, [commitState, persist])
@@ -279,5 +301,6 @@ export function useLiveRequestSync({
     ...state,
     refresh,
     acknowledgeChanges,
+    getCurrentState,
   }
 }

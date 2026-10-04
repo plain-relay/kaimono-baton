@@ -36,6 +36,8 @@ type CheckoutReviewSectionProps = {
   onEditConsultation: (itemId: string) => void
   onResolveConsultation: (itemId: string) => void
   onFinishShopping: () => void
+  isFinishBlocked?: boolean
+  finishBlockMessage?: string
 }
 
 export function CheckoutReviewSection({
@@ -53,6 +55,8 @@ export function CheckoutReviewSection({
   onEditConsultation,
   onResolveConsultation,
   onFinishShopping,
+  isFinishBlocked = false,
+  finishBlockMessage,
 }: CheckoutReviewSectionProps) {
   return (
     <section
@@ -194,6 +198,7 @@ export function CheckoutReviewSection({
       ) : null}
 
       <div className="finish-shopping-panel">
+        {finishBlockMessage ? <p role="status">{finishBlockMessage}</p> : null}
         {completionState.pendingCount > 0 ? (
           <p>未購入の商品が{completionState.pendingCount}件あります。</p>
         ) : null}
@@ -214,6 +219,7 @@ export function CheckoutReviewSection({
               type="button"
               className="primary-button large-button finish-shopping-button"
               onClick={onFinishShopping}
+              disabled={isFinishBlocked}
             >
               買い物を終了する
             </button>
