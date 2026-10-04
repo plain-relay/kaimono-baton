@@ -8,6 +8,7 @@ type CartConfirmationDialogProps = {
   quantityConfirmed: boolean
   conditionConfirmed: boolean
   isConditionFollowUp: boolean
+  isLiveChangeReview?: boolean
   isPurchaseLocked: boolean
   isConsultationLocked: boolean
   onQuantityConfirmedChange: (confirmed: boolean) => void
@@ -41,6 +42,7 @@ export function CartConfirmationDialog({
   quantityConfirmed,
   conditionConfirmed,
   isConditionFollowUp,
+  isLiveChangeReview = false,
   isPurchaseLocked,
   isConsultationLocked,
   onQuantityConfirmedChange,
@@ -58,7 +60,9 @@ export function CartConfirmationDialog({
   return (
     <ShoppingDialog
       title={
-        isConditionFollowUp
+        isLiveChangeReview
+          ? `${item.productNameSnapshot}の変更内容を確認します`
+          : isConditionFollowUp
           ? `${item.productNameSnapshot}の条件を確認します`
           : `${item.productNameSnapshot}をかごに入れます`
       }
