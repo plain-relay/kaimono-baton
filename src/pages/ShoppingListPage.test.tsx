@@ -229,6 +229,9 @@ describe('ShoppingListPage buyer flow', () => {
     expect(container.textContent).toContain('共有操作済み')
     await clickAndFlush(button('1個をかごに入れる'))
     expect(buttons('買い物を終了する')).toHaveLength(0)
+    const checkout = container.querySelector('.checkout-review-card')!
+    expect(checkout.textContent).toContain('質問: これでいい？')
+    expect(checkout.textContent).not.toContain('その他')
     await clickAndFlush(button('相談を解決'))
     expect(readConsultations(payload.requestId)[item.id].status).toBe('resolved')
     expect(readCheckedState(payload.requestId)[item.id]).toBe('inCart')

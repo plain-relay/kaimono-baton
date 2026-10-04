@@ -23,12 +23,13 @@
    Free questions omit the artificial other/replacement wording. Not-buying still
    requires an explicit reason and reuses existing state transitions and Undo.
 4. Share cancellation/failure preserves input; unresolved questions survive reload,
-   remain part of completion checks, and share success means a share operation only.
+   remain visible in checkout and part of completion checks, and share success
+   means a share operation only.
 
 ## Files and invariants
 
 Change the shopping/product cards, creation bottom actions/page,
-consultation dialog/hook/summary/message utilities, CSS, and focused regression tests.
+consultation dialog/hook/summary/checkout/message utilities, CSS, and focused regression tests.
 Update existing interaction tests for the intentionally changed visible labels.
 Use existing localStorage keys/shapes, request IDs/codecs/budgets, catalog/recovery,
 share lock, IME input, dialogs, purchase states, and optional-feature defaults.

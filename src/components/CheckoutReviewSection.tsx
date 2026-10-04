@@ -8,6 +8,7 @@ import type {
 import {
   getItemIssueLabel,
   getUnavailableReasonLabel,
+  isFreeQuestion,
 } from '../utils/shoppingMessages'
 import {
   getItemStatus,
@@ -162,7 +163,11 @@ export function CheckoutReviewSection({
               <li key={item.id}>
                 <div>
                   <strong>{item.productNameSnapshot}</strong>
-                  <span>{getUnavailableReasonLabel(consultation.reason)}</span>
+                  <span>
+                    {isFreeQuestion(consultation)
+                      ? `質問: ${consultation.note}`
+                      : getUnavailableReasonLabel(consultation.reason)}
+                  </span>
                 </div>
                 <div className="checkout-actions">
                   <button
