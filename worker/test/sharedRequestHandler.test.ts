@@ -249,6 +249,7 @@ describe('shared request API handler', () => {
     )
     expect(response.status).toBe(200)
     expect(response.headers.get('ETag')).toBe('"revision-1"')
+    expect(response.headers.get('Cache-Control')).toBe('no-store, no-transform')
     await expect(response.json()).resolves.toEqual(snapshot())
 
     const notModified = await handleSharedRequestApiRequest(
@@ -261,6 +262,7 @@ describe('shared request API handler', () => {
       { now: () => now },
     )
     expect(notModified.status).toBe(304)
+    expect(notModified.headers.get('Cache-Control')).toBe('no-store, no-transform')
     expect(await notModified.text()).toBe('')
     expect(stub.getRequest).toHaveBeenCalledTimes(2)
   })
