@@ -255,7 +255,9 @@ export class WorkerProductPhotoUploadProvider
           let response: Response
           this.recordStage(startedStage)
           try {
-            response = await this.fetchImplementation(
+            // Preserve the browser's native fetch receiver contract.
+            const fetchImplementation = this.fetchImplementation
+            response = await fetchImplementation(
               uploadUrl(this.endpoint),
               {
                 method: 'POST',
