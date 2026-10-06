@@ -65,7 +65,9 @@ export async function verifyTurnstileTokenDetailed(options: {
 
   let response: Response
   try {
-    response = await options.fetchImplementation(TURNSTILE_SITEVERIFY_URL, {
+    // Native Worker fetch rejects an arbitrary options object as its receiver.
+    const fetchImplementation = options.fetchImplementation
+    response = await fetchImplementation(TURNSTILE_SITEVERIFY_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
