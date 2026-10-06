@@ -51,7 +51,8 @@ describe('WorkerLiveRequestApi', () => {
   it('adds a verified validation session to create, read, and update requests', async () => {
     const validationSessionToken = `mv1_${'A'.repeat(32)}`
     const fetchImplementation = vi
-      .fn(async (_url, init) => {
+      .fn(async function (this: unknown, _url, init) {
+        if (this !== undefined) throw new TypeError('Illegal invocation')
         expect(new Headers(init?.headers).get(
           'X-Otsukai-Validation-Session',
         )).toBe(validationSessionToken)

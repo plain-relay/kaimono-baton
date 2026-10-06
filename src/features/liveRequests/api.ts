@@ -153,7 +153,9 @@ export class WorkerLiveRequestApi implements LiveRequestApi {
   ): Promise<LiveRequestCreateResponse> {
     try {
       const turnstileToken = await this.token(options.signal)
-      const response = await this.fetchImplementation(
+      // Native browser fetch must be invoked without this adapter as its receiver.
+      const fetchImplementation = this.fetchImplementation
+      const response = await fetchImplementation(
         endpointUrl(this.endpoint, '/v1/requests'),
         requestInit(
           {
@@ -197,7 +199,8 @@ export class WorkerLiveRequestApi implements LiveRequestApi {
       throw new LiveRequestApiError('invalid-request')
     }
     try {
-      const response = await this.fetchImplementation(
+      const fetchImplementation = this.fetchImplementation
+      const response = await fetchImplementation(
         endpointUrl(this.endpoint, `/v1/requests/${requestToken}`),
         requestInit(
           {
@@ -268,7 +271,8 @@ export class WorkerLiveRequestApi implements LiveRequestApi {
     }
     try {
       const turnstileToken = await this.token(options.signal)
-      const response = await this.fetchImplementation(
+      const fetchImplementation = this.fetchImplementation
+      const response = await fetchImplementation(
         endpointUrl(this.endpoint, `/v1/requests/${requestToken}`),
         requestInit(
           {

@@ -146,7 +146,9 @@ export class GeminiHandwritingImportProvider
       body.append('requestId', requestId)
 
       this.diagnostics?.record('worker-request-started')
-      const response = await this.fetchImplementation(this.endpoint, {
+      // Preserve the browser's native fetch receiver contract.
+      const fetchImplementation = this.fetchImplementation
+      const response = await fetchImplementation(this.endpoint, {
         method: 'POST',
         body,
         signal: options.signal,

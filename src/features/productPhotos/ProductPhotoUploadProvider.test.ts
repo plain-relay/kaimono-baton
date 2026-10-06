@@ -36,7 +36,8 @@ describe('WorkerProductPhotoUploadProvider', () => {
   it('gets one token and uploads a strict multipart batch', async () => {
     const challenge = turnstile()
     const record = vi.fn()
-    const fetchImplementation = vi.fn(async (input, init) => {
+    const fetchImplementation = vi.fn(async function (this: unknown, input, init) {
+      if (this !== undefined) throw new TypeError('Illegal invocation')
       expect(String(input)).toBe('https://worker.example/v1/photos/batch')
       expect(init?.method).toBe('POST')
       expect(init?.headers).toBeUndefined()

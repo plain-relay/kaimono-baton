@@ -50,7 +50,8 @@ describe('GeminiHandwritingImportProvider', () => {
     const tokenProvider = turnstile()
     const record = vi.fn()
     const adoptRequestId = vi.fn()
-    const fetchImplementation = vi.fn(async (_url, init) => {
+    const fetchImplementation = vi.fn(async function (this: unknown, _url, init) {
+      if (this !== undefined) throw new TypeError('Illegal invocation')
       expect(init?.method).toBe('POST')
       expect(init?.signal).toBeInstanceOf(AbortSignal)
       const form = init?.body as FormData
