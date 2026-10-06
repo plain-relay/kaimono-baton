@@ -61,7 +61,8 @@ function corsHeaders(
 ): HeadersInit {
   return {
     'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
+    // Keep revision ETags strong when Cloudflare would compress the response.
+    'Cache-Control': etag ? 'no-store, no-transform' : 'no-store',
     'X-Content-Type-Options': 'nosniff',
     ...(etag ? { ETag: etag } : {}),
     ...(origin
