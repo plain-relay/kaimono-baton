@@ -126,10 +126,10 @@ describe('CreateRequestPage simplified request form', () => {
     const catalog = updateBaseProduct(
       createEmptyHouseholdCatalog('2026-08-01T00:00:00.000Z'),
       'apple',
-      { name: '家庭のりんご', unit: '玉', categoryId: 'fruits', hidden: false },
+      { name: '家庭のりんご', unit: '玉', categoryId: 'fruits', hidden: false, defaultMemo: 'ふじのみ' },
       '2026-08-01T00:01:00.000Z',
     )
-    window.localStorage.setItem('otsukai:householdCatalog:v1', JSON.stringify(catalog))
+    window.localStorage.setItem('otsukai:householdCatalog:v2', JSON.stringify(catalog))
     await renderPage()
     expect(container.textContent).not.toContain('条件: 王林かフジ')
     await clickAndFlush(container.querySelector<HTMLButtonElement>('[aria-label^="豚小間肉の条件を閉じる"]')!)
@@ -146,15 +146,15 @@ describe('CreateRequestPage simplified request form', () => {
     await clickAndFlush(button('次の買い物リストを作る'))
     const nextDraft = JSON.parse(window.localStorage.getItem('otsukai:createDraft')!)
     expect(Object.values(nextDraft).every((item: unknown) => (item as { quantity: number }).quantity === 0)).toBe(true)
-    expect(nextDraft.apple).toEqual({ quantity: 0, memo: '王林かフジ' })
+    expect(nextDraft.apple).toEqual({ quantity: 0, memo: 'ふじのみ' })
     expect(nextDraft['pork-koma']).toEqual({ quantity: 0, memo: '国産' })
     expect(container.textContent).not.toContain('一回だけの電池')
-    expect(window.localStorage.getItem('otsukai:householdCatalog:v1')).toBe(JSON.stringify(catalog))
+    expect(window.localStorage.getItem('otsukai:householdCatalog:v2')).toBe(JSON.stringify(catalog))
 
     confirm.mockReturnValue(false)
     await clickAndFlush(button('条件も含めてすべて消去'))
     expect(confirm).toHaveBeenLastCalledWith('条件も含めて入力内容をすべて消去しますか？')
-    expect(JSON.parse(window.localStorage.getItem('otsukai:createDraft')!).apple.memo).toBe('王林かフジ')
+    expect(JSON.parse(window.localStorage.getItem('otsukai:createDraft')!).apple.memo).toBe('ふじのみ')
     confirm.mockReturnValue(true)
     await clickAndFlush(button('条件も含めてすべて消去'))
     act(() => root.unmount())
@@ -188,6 +188,30 @@ describe('CreateRequestPage simplified request form', () => {
     const nextPayload = decodeCompactRequestV2OrV3(new URL(newUrl).hash.slice('#/l/'.length))
     expect(nextPayload.requestId).not.toBe(oldPayload.requestId)
     expect(decodeCompactRequestV2OrV3(new URL(oldUrl).hash.slice('#/l/'.length))).toEqual(oldPayload)
+  })
+
+  it('copies household defaults into a new fixed snapshot while keeping the catalog unchanged', async () => {
+    const catalog = addHouseholdProduct(
+      updateBaseProduct(createEmptyHouseholdCatalog(), 'yogurt', {
+        name: 'ヨーグルト', unit: '個', categoryId: 'eggs-dairy', hidden: false, defaultMemo: 'N1',
+      }),
+      { name: '家庭用洗剤', unit: '袋', categoryId: 'daily', defaultMemo: '無香料' },
+    )
+    const raw = JSON.stringify(catalog)
+    window.localStorage.setItem('otsukai:householdCatalog:v2', raw)
+    const share = vi.fn(async (_data: ShareData) => undefined)
+    Object.defineProperty(window.navigator, 'share', { configurable: true, value: share })
+    await renderPage()
+    await clickAndFlush(container.querySelector('[aria-label^="ヨーグルトを1個増やす"]')!)
+    await clickAndFlush(container.querySelector('[aria-label^="家庭用洗剤を1袋増やす"]')!)
+    await clickAndFlush(button('確認へ'))
+    expect(container.textContent).toContain('N1')
+    expect(container.textContent).toContain('無香料')
+    await clickAndFlush(button('LINEで送る'))
+    const url = share.mock.calls[0][0].text!.split('\n').at(-1)!
+    const payload = decodeCompactRequestV2OrV3(new URL(url).hash.slice('#/l/'.length))
+    expect(payload.items.map(item => item.memo)).toEqual(['N1', '無香料'])
+    expect(window.localStorage.getItem('otsukai:householdCatalog:v2')).toBe(raw)
   })
 
   it('blocks reset while native sharing is in progress', async () => {
@@ -512,7 +536,7 @@ describe('CreateRequestPage simplified request form', () => {
       householdId,
     )
     window.localStorage.setItem(
-      'otsukai:householdCatalog:v1',
+      'otsukai:householdCatalog:v2',
       JSON.stringify(catalog),
     )
     window.localStorage.setItem(

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { HouseholdCatalogV1 } from '../types/householdCatalog'
+import type { HouseholdCatalog } from '../types/householdCatalog'
 import {
   createCatalogRecoveryBundle,
   type CatalogRecoveryBundle,
@@ -8,7 +8,7 @@ import type { CatalogBackupStatus as BackupStatus } from '../utils/catalogFinger
 import { shareText } from '../utils/shareText'
 
 type CatalogBackupStatusProps = {
-  catalog: HouseholdCatalogV1
+  catalog: HouseholdCatalog
   backupStatus: BackupStatus
   onConfirmBackup: (fingerprint: string) => boolean
   compact?: boolean

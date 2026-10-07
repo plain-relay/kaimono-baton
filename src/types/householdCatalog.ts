@@ -1,7 +1,9 @@
 import type { Product } from './product'
 
-export type HouseholdCatalogV1 = {
-  schemaVersion: 1
+// Runtime validation accepts legacy V1 without defaultMemo and current V2.
+// New catalogs and persistence/export always use V2.
+export type HouseholdCatalog = {
+  schemaVersion: 1 | 2
   revision: number
   updatedAt: string
   overrides: Record<string, BaseProductOverride>
@@ -13,6 +15,7 @@ export type BaseProductOverride = {
   unit?: string
   categoryId?: string
   hidden?: boolean
+  defaultMemo?: string
 }
 
 export type HouseholdProduct = {
@@ -23,6 +26,7 @@ export type HouseholdProduct = {
   hidden: boolean
   createdAt: string
   updatedAt: string
+  defaultMemo?: string
 }
 
 export type EffectiveProduct = Product & {
@@ -36,8 +40,8 @@ export type CatalogBackupReceipt = {
   confirmedAt: string
 }
 
-export type CatalogRecoveryPayloadV1 = {
-  version: 1
+export type CatalogRecoveryPayload = {
+  version: 1 | 2
   createdAt: string
-  catalog: HouseholdCatalogV1
+  catalog: HouseholdCatalog
 }

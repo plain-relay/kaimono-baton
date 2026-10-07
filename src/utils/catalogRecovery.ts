@@ -9,8 +9,8 @@ import {
 import { categories } from '../data/categories'
 import { products } from '../data/products'
 import type {
-  CatalogRecoveryPayloadV1,
-  HouseholdCatalogV1,
+  CatalogRecoveryPayload,
+  HouseholdCatalog,
 } from '../types/householdCatalog'
 import type { Category, Product } from '../types/product'
 import { createCatalogFingerprint } from './catalogFingerprint'
@@ -23,7 +23,7 @@ const RECOVERY_PAYLOAD_KEYS = new Set(['version', 'createdAt', 'catalog'])
 const MAX_ENCODED_RECOVERY_CHARS = 50_000
 
 export type CatalogRecoveryBundle = {
-  payload: CatalogRecoveryPayloadV1
+  payload: CatalogRecoveryPayload
   encoded: string
   url: string
   urlLength: number
@@ -39,6 +39,7 @@ export type CatalogRecoveryPreview = {
   categoryChanged: number
   hidden: number
   added: number
+  conditions: number
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,12 +58,12 @@ function parseRecoveryPayloadValue(
   value: unknown,
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): CatalogRecoveryPayloadV1 {
+): CatalogRecoveryPayload {
   if (
     !isRecord(value) ||
     hasDangerousObjectKeys(value) ||
     Object.keys(value).some((key) => !RECOVERY_PAYLOAD_KEYS.has(key)) ||
-    value.version !== 1
+    (value.version !== 1 && value.version !== 2)
   ) {
     throw new Error('商品リスト復旧データの形式が正しくありません。')
   }
@@ -72,18 +73,18 @@ function parseRecoveryPayloadValue(
     baseProducts,
     categoryList,
   )
-  if (!createdAt || !catalog) {
+  if (!createdAt || !catalog || catalog.schemaVersion !== value.version) {
     throw new Error('商品リスト復旧データの形式が正しくありません。')
   }
-  return { version: 1, createdAt, catalog }
+  return { version: value.version, createdAt, catalog }
 }
 
 export function createCatalogRecoveryPayload(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   createdAt = new Date().toISOString(),
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): CatalogRecoveryPayloadV1 {
+): CatalogRecoveryPayload {
   const normalizedCatalog = normalizeHouseholdCatalog(
     catalog,
     baseProducts,
@@ -94,14 +95,14 @@ export function createCatalogRecoveryPayload(
     throw new Error('商品リスト復旧データを作成できませんでした。')
   }
   return {
-    version: 1,
+    version: 2,
     createdAt: normalizedCreatedAt,
-    catalog: normalizedCatalog,
+    catalog: { ...normalizedCatalog, schemaVersion: 2 },
   }
 }
 
 export function encodeCatalogRecoveryPayload(
-  payload: CatalogRecoveryPayloadV1,
+  payload: CatalogRecoveryPayload,
 ): string {
   return compressToEncodedURIComponent(JSON.stringify(payload))
 }
@@ -116,7 +117,7 @@ export function buildCatalogRecoveryUrl(
 
 export function createCatalogRecoveryBundle(
   baseUrl: string,
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   createdAt = new Date().toISOString(),
 ): CatalogRecoveryBundle {
   const payload = createCatalogRecoveryPayload(catalog, createdAt)
@@ -143,7 +144,7 @@ export function decodeCatalogRecoveryPayload(
   encoded: string,
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): CatalogRecoveryPayloadV1 {
+): CatalogRecoveryPayload {
   if (!encoded || encoded.length > MAX_ENCODED_RECOVERY_CHARS) {
     throw new Error('商品リスト復旧データが大きすぎます。')
   }
@@ -172,7 +173,7 @@ export function parseCatalogRecoveryJson(
   json: string,
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): CatalogRecoveryPayloadV1 {
+): CatalogRecoveryPayload {
   if (!json || json.length > MAX_CATALOG_RECOVERY_JSON_CHARS) {
     throw new Error('商品リスト復旧データが大きすぎます。')
   }
@@ -191,7 +192,7 @@ export function parseCatalogRecoveryJson(
 }
 
 export function createCatalogRecoveryPreview(
-  payload: CatalogRecoveryPayloadV1,
+  payload: CatalogRecoveryPayload,
 ): CatalogRecoveryPreview {
   const overrides = Object.values(payload.catalog.overrides)
   return {
@@ -207,12 +208,15 @@ export function createCatalogRecoveryPreview(
       overrides.filter((override) => override.hidden === true).length +
       payload.catalog.addedProducts.filter((product) => product.hidden).length,
     added: payload.catalog.addedProducts.length,
+    conditions:
+      overrides.filter((override) => override.defaultMemo !== undefined).length +
+      payload.catalog.addedProducts.filter((product) => product.defaultMemo !== undefined).length,
   }
 }
 
 export function isRecoveryPayloadOlderThanCatalog(
-  payload: CatalogRecoveryPayloadV1,
-  currentCatalog: HouseholdCatalogV1,
+  payload: CatalogRecoveryPayload,
+  currentCatalog: HouseholdCatalog,
 ): boolean {
   return Date.parse(currentCatalog.updatedAt) > Date.parse(payload.createdAt)
 }

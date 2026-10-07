@@ -9,7 +9,7 @@ import {
   MAX_HOUSEHOLD_PRODUCTS,
 } from '../constants/requestLimits'
 import { products } from '../data/products'
-import type { HouseholdCatalogV1 } from '../types/householdCatalog'
+import type { HouseholdCatalog } from '../types/householdCatalog'
 import {
   CATALOG_BACKUP_RECEIPT_KEY,
   HOUSEHOLD_CATALOG_KEY,
@@ -34,6 +34,51 @@ function setNativeInputValue(input: HTMLInputElement, value: string) {
 }
 
 describe('ProductCatalogPage', () => {
+  it('edits usual conditions, preserves drafts, reopens saved conditions and resets to the base', async () => {
+    const draft = JSON.stringify({ milk: { quantity: 1, memo: '今回だけ' } })
+    window.localStorage.setItem('otsukai:createDraft', draft)
+    await renderPage()
+    await click(container.querySelector('[aria-label="牛乳を編集"]')!)
+    await inputText('input[aria-describedby="catalog-product-memo-help catalog-product-memo-count"]', '国産')
+    await click(button('変更を保存'))
+    expect(savedCatalog().overrides.milk).toEqual({ defaultMemo: '国産' })
+    expect(container.textContent).toContain('いつもの条件: 国産')
+    expect(window.localStorage.getItem('otsukai:createDraft')).toBe(draft)
+    await click(container.querySelector('[aria-label="牛乳を編集"]')!)
+    expect(container.querySelector<HTMLInputElement>('input[aria-describedby="catalog-product-memo-help catalog-product-memo-count"]')!.value).toBe('国産')
+    await inputText('input[aria-describedby="catalog-product-memo-help catalog-product-memo-count"]', '今回の候補')
+    await click(button('キャンセル'))
+    expect(savedCatalog().overrides.milk).toEqual({ defaultMemo: '国産' })
+    await click(container.querySelector('[aria-label="牛乳を編集"]')!)
+    await click(button('標準に戻す'))
+    expect(savedCatalog().overrides.milk).toBeUndefined()
+    expect(window.localStorage.getItem('otsukai:createDraft')).toBe(draft)
+  })
+
+  it('keeps IME composition intact, bounds committed conditions and retains input on save failure', async () => {
+    await renderPage()
+    await click(container.querySelector('[aria-label="牛乳を編集"]')!)
+    const input = container.querySelector<HTMLInputElement>('input[aria-describedby="catalog-product-memo-help catalog-product-memo-count"]')!
+    await act(async () => {
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+      setNativeInputValue(input, '🛒'.repeat(32))
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }))
+    })
+    expect(input.value).toBe('🛒'.repeat(32))
+    await act(async () => input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })))
+    expect(input.value).toBe('🛒'.repeat(30))
+    const originalSet = window.localStorage.setItem.bind(window.localStorage)
+    const writeSpy = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === HOUSEHOLD_CATALOG_KEY) throw new Error('quota')
+      originalSet(key, value)
+    })
+    await click(button('変更を保存'))
+    expect(input.value).toBe('🛒'.repeat(30))
+    expect(container.textContent).toContain('商品リストを保存できませんでした')
+    expect(window.localStorage.getItem(HOUSEHOLD_CATALOG_KEY)).toBeNull()
+    writeSpy.mockRestore()
+  })
+
   let container: HTMLDivElement
   let root: Root
 
@@ -135,7 +180,7 @@ describe('ProductCatalogPage', () => {
 
   function savedCatalog() {
     return JSON.parse(
-      window.localStorage.getItem('otsukai:householdCatalog:v1') ?? '{}',
+      window.localStorage.getItem('otsukai:householdCatalog:v2') ?? '{}',
     ) as {
       overrides: Record<string, unknown>
       addedProducts: Array<{
@@ -338,6 +383,7 @@ describe('ProductCatalogPage', () => {
         unit: 'パック',
         categoryId: 'drinks',
         hidden: false,
+        defaultMemo: '国産',
       },
       '2026-07-26T01:00:00.000Z',
     )
@@ -356,13 +402,15 @@ describe('ProductCatalogPage', () => {
       '商品リストを復元',
     )
     expect(container.textContent).toContain('名前変更')
-    expect(window.localStorage.getItem('otsukai:householdCatalog:v1')).toBeNull()
+    expect(container.textContent).toContain('いつもの条件1件')
+    expect(window.localStorage.getItem('otsukai:householdCatalog:v2')).toBeNull()
 
     await click(button('この商品リストに置き換える'))
     expect(savedCatalog().overrides.milk).toEqual({
       name: '復元した牛乳',
       unit: 'パック',
       categoryId: 'drinks',
+      defaultMemo: '国産',
     })
     expect(container.querySelector('h1')?.textContent).toBe(
       '商品リストを編集',
@@ -374,7 +422,7 @@ describe('ProductCatalogPage', () => {
       JSON.parse(
         window.localStorage.getItem(CATALOG_BACKUP_RECEIPT_KEY) ?? '{}',
       ).catalogFingerprint,
-    ).toMatch(/^catalog-v1-/)
+    ).toMatch(/^catalog-v2-/)
   })
 
   it('ignores a JSON change event when no file is selected', async () => {
@@ -425,7 +473,7 @@ describe('ProductCatalogPage', () => {
   it('accepts a valid recovery JSON whose UTF-8 bytes exceed its character count', async () => {
     const now = '2026-07-26T00:00:00.000Z'
     const familyEmoji = '👨‍👩‍👧‍👦'
-    const catalog: HouseholdCatalogV1 = {
+    const catalog: HouseholdCatalog = {
       schemaVersion: 1,
       revision: 1,
       updatedAt: now,
@@ -505,7 +553,7 @@ describe('ProductCatalogPage', () => {
     {
       label: 'unsupported version',
       json: JSON.stringify({
-        version: 2,
+        version: 3,
         createdAt: '2026-07-26T02:00:00.000Z',
         catalog: createEmptyHouseholdCatalog(
           '2026-07-26T01:00:00.000Z',
@@ -708,7 +756,7 @@ describe('ProductCatalogPage', () => {
       '2026-07-26T01:00:00.000Z',
     )
     window.localStorage.setItem(
-      'otsukai:householdCatalog:v1',
+      'otsukai:householdCatalog:v2',
       JSON.stringify(changed),
     )
     Object.defineProperty(navigator, 'share', {
@@ -728,7 +776,7 @@ describe('ProductCatalogPage', () => {
           'otsukai:catalogBackupReceipt:v1',
         ) ?? '{}',
       ).catalogFingerprint,
-    ).toMatch(/^catalog-v1-/)
+    ).toMatch(/^catalog-v2-/)
     expect(container.textContent).toContain(
       '現在の変更はバックアップ済みです。',
     )

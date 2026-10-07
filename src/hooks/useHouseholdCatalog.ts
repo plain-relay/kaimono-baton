@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { products } from '../data/products'
 import type {
-  CatalogRecoveryPayloadV1,
-  HouseholdCatalogV1,
+  CatalogRecoveryPayload,
+  HouseholdCatalog,
 } from '../types/householdCatalog'
 import {
   loadCatalogBackupReceipt,
@@ -39,7 +39,7 @@ export function useHouseholdCatalog() {
     [backupReceipt, catalog],
   )
 
-  const updateCatalog = (nextCatalog: HouseholdCatalogV1): boolean => {
+  const updateCatalog = (nextCatalog: HouseholdCatalog): boolean => {
     const result = saveHouseholdCatalog(nextCatalog)
     if (!result.ok) {
       return false
@@ -61,7 +61,7 @@ export function useHouseholdCatalog() {
   }
 
   const replaceCatalogFromRecovery = (
-    payload: CatalogRecoveryPayloadV1,
+    payload: CatalogRecoveryPayload,
   ): boolean => {
     const result = saveHouseholdCatalog(payload.catalog)
     if (!result.ok) {

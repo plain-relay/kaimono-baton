@@ -10,6 +10,8 @@ import type {
   LiveRequestSnapshot,
 } from '../features/liveRequests/types'
 import { LiveRequestManagePage } from './LiveRequestManagePage'
+import { createEmptyHouseholdCatalog, updateBaseProduct } from '../utils/householdCatalog'
+import { saveHouseholdCatalog } from '../utils/catalogStorage'
 
 const requestToken = `r1_${'A'.repeat(32)}`
 const editSecret = `e1_${'B'.repeat(43)}`
@@ -52,6 +54,48 @@ function snapshot(
 }
 
 describe('LiveRequestManagePage', () => {
+  it('copies catalog defaults for new selections and separates temporary/custom conditions', async () => {
+    const catalog = updateBaseProduct(createEmptyHouseholdCatalog(), 'cabbage', {
+      name: 'キャベツ', unit: '玉', categoryId: 'vegetables', hidden: false, defaultMemo: '半玉',
+    })
+    expect(saveHouseholdCatalog(catalog).ok).toBe(true)
+    await renderPage()
+    const select = container.querySelector<HTMLSelectElement>('select')!
+    await act(async () => {
+      select.value = 'cabbage'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const memo = () => container.querySelector<HTMLInputElement>('input[aria-label="追加商品の条件"]')!
+    expect(memo().value).toBe('半玉')
+    await changeInput(memo(), '')
+    await click(container.querySelectorAll('input[name="live-add-mode"]')[1])
+    expect(memo().value).toBe('')
+    await changeInput(memo(), '自由商品の条件')
+    await click(container.querySelectorAll('input[name="live-add-mode"]')[0])
+    expect(memo().value).toBe('')
+    await click(button('商品を追加'))
+    const operation = vi.mocked(api.patch).mock.calls[0][3][0]
+    expect(operation).toMatchObject({ type: 'add', item: { productId: 'cabbage' } })
+    if (operation.type !== 'add') throw new Error('Expected add')
+    expect(operation.item.memo).toBeUndefined()
+    expect(window.localStorage.getItem('otsukai:householdCatalog:v2')).toContain('半玉')
+  })
+
+  it('sends the saved default on catalog addition and does not modify existing request conditions', async () => {
+    expect(saveHouseholdCatalog(updateBaseProduct(createEmptyHouseholdCatalog(), 'cabbage', {
+      name: 'キャベツ', unit: '玉', categoryId: 'vegetables', hidden: false, defaultMemo: '半玉',
+    })).ok).toBe(true)
+    await renderPage()
+    const select = container.querySelector<HTMLSelectElement>('select')!
+    await act(async () => {
+      select.value = 'cabbage'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await click(button('商品を追加'))
+    expect(vi.mocked(api.patch).mock.calls[0][3]).toMatchObject([{ type: 'add', item: { memo: '半玉' } }])
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="牛乳の新しい条件"]')?.value).toBe('')
+  })
+
   let container: HTMLDivElement
   let root: Root
   let api: LiveRequestApi

@@ -1,4 +1,5 @@
 import {
+  MAX_ITEM_CONDITION_CHARS,
   MAX_CUSTOM_ITEM_NAME_CHARS,
   MAX_CUSTOM_ITEM_UNIT_CHARS,
   MAX_HOUSEHOLD_PRODUCTS,
@@ -8,7 +9,7 @@ import { products } from '../data/products'
 import type {
   BaseProductOverride,
   EffectiveProduct,
-  HouseholdCatalogV1,
+  HouseholdCatalog,
   HouseholdProduct,
 } from '../types/householdCatalog'
 import type { Category, Product } from '../types/product'
@@ -19,6 +20,7 @@ const HOUSEHOLD_PRODUCT_ID_PATTERN =
   /^household:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const DANGEROUS_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 const OVERRIDE_KEYS = new Set(['name', 'unit', 'categoryId', 'hidden'])
+const OVERRIDE_V2_KEYS = new Set([...OVERRIDE_KEYS, 'defaultMemo'])
 const HOUSEHOLD_PRODUCT_KEYS = new Set([
   'id',
   'name',
@@ -28,6 +30,7 @@ const HOUSEHOLD_PRODUCT_KEYS = new Set([
   'createdAt',
   'updatedAt',
 ])
+const HOUSEHOLD_PRODUCT_V2_KEYS = new Set([...HOUSEHOLD_PRODUCT_KEYS, 'defaultMemo'])
 const CATALOG_KEYS = new Set([
   'schemaVersion',
   'revision',
@@ -41,6 +44,7 @@ export type BaseProductEditInput = {
   unit: string
   categoryId: string
   hidden: boolean
+  defaultMemo?: string
 }
 
 export type HouseholdProductInput = {
@@ -48,6 +52,7 @@ export type HouseholdProductInput = {
   unit: string
   categoryId: string
   hidden?: boolean
+  defaultMemo?: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,6 +79,12 @@ function normalizeName(value: unknown): string | null {
   return name && countUserCharacters(name) <= MAX_CUSTOM_ITEM_NAME_CHARS
     ? name
     : null
+}
+
+function normalizeDefaultMemo(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const memo = value.trim()
+  return countUserCharacters(memo) <= MAX_ITEM_CONDITION_CHARS ? memo : null
 }
 
 function normalizeUnit(value: unknown): string | null {
@@ -147,13 +158,13 @@ export function createHouseholdProductId(
 
 export function createEmptyHouseholdCatalog(
   now = new Date().toISOString(),
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   const updatedAt = normalizeDate(now)
   if (!updatedAt) {
     throw new Error('更新日時の形式が正しくありません。')
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     updatedAt,
     overrides: {},
@@ -165,12 +176,12 @@ export function normalizeHouseholdCatalog(
   value: unknown,
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): HouseholdCatalogV1 | null {
+): HouseholdCatalog | null {
   if (
     !isRecord(value) ||
     hasDangerousObjectKeys(value) ||
     !hasOnlyKeys(value, CATALOG_KEYS) ||
-    value.schemaVersion !== 1 ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
     !Number.isInteger(value.revision) ||
     (value.revision as number) < 0 ||
     !isRecord(value.overrides) ||
@@ -194,7 +205,7 @@ export function normalizeHouseholdCatalog(
     if (
       !baseProduct ||
       !isRecord(rawOverride) ||
-      !hasOnlyKeys(rawOverride, OVERRIDE_KEYS)
+      !hasOnlyKeys(rawOverride, value.schemaVersion === 2 ? OVERRIDE_V2_KEYS : OVERRIDE_KEYS)
     ) {
       return null
     }
@@ -237,6 +248,11 @@ export function normalizeHouseholdCatalog(
         override.hidden = true
       }
     }
+    if (typeof rawOverride.defaultMemo !== 'undefined') {
+      const memo = normalizeDefaultMemo(rawOverride.defaultMemo)
+      if (memo === null) return null
+      override.defaultMemo = memo
+    }
     if (Object.keys(override).length > 0) {
       normalizedOverrides[productId] = override
     }
@@ -245,11 +261,11 @@ export function normalizeHouseholdCatalog(
   const seenIds = new Set(baseProducts.map((product) => product.id))
   const normalizedAddedProducts: HouseholdProduct[] = []
   for (const rawProduct of value.addedProducts) {
+    if (!isRecord(rawProduct)) return null
     const normalizedId =
       typeof rawProduct.id === 'string' ? rawProduct.id.toLowerCase() : ''
     if (
-      !isRecord(rawProduct) ||
-      !hasOnlyKeys(rawProduct, HOUSEHOLD_PRODUCT_KEYS) ||
+      !hasOnlyKeys(rawProduct, value.schemaVersion === 2 ? HOUSEHOLD_PRODUCT_V2_KEYS : HOUSEHOLD_PRODUCT_KEYS) ||
       typeof rawProduct.id !== 'string' ||
       !isHouseholdProductId(rawProduct.id) ||
       seenIds.has(normalizedId) ||
@@ -268,6 +284,9 @@ export function normalizeHouseholdCatalog(
       return null
     }
 
+    const memo = rawProduct.defaultMemo === undefined
+      ? undefined : normalizeDefaultMemo(rawProduct.defaultMemo)
+    if (memo === null) return null
     seenIds.add(normalizedId)
     normalizedAddedProducts.push({
       id: normalizedId,
@@ -277,11 +296,12 @@ export function normalizeHouseholdCatalog(
       hidden: rawProduct.hidden,
       createdAt,
       updatedAt: productUpdatedAt,
+      ...(memo !== undefined ? { defaultMemo: memo } : {}),
     })
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: value.schemaVersion,
     revision: value.revision as number,
     updatedAt,
     overrides: normalizedOverrides,
@@ -290,10 +310,10 @@ export function normalizeHouseholdCatalog(
 }
 
 function requireNormalizedCatalog(
-  value: HouseholdCatalogV1,
+  value: HouseholdCatalog,
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   const normalized = normalizeHouseholdCatalog(value, baseProducts, categoryList)
   if (!normalized) {
     throw new Error('商品リストの形式が正しくありません。')
@@ -302,16 +322,17 @@ function requireNormalizedCatalog(
 }
 
 function compareCatalogContent(
-  left: HouseholdCatalogV1,
-  right: HouseholdCatalogV1,
+  left: HouseholdCatalog,
+  right: HouseholdCatalog,
 ): boolean {
-  const addedProductContent = (catalog: HouseholdCatalogV1) =>
+  const addedProductContent = (catalog: HouseholdCatalog) =>
     catalog.addedProducts.map((product) => ({
       id: product.id,
       name: product.name,
       unit: product.unit,
       categoryId: product.categoryId,
       hidden: product.hidden,
+      defaultMemo: product.defaultMemo,
     }))
   return (
     JSON.stringify(left.overrides) === JSON.stringify(right.overrides) &&
@@ -321,12 +342,12 @@ function compareCatalogContent(
 }
 
 function finalizeCatalogMutation(
-  current: HouseholdCatalogV1,
-  candidate: HouseholdCatalogV1,
+  current: HouseholdCatalog,
+  candidate: HouseholdCatalog,
   now: string,
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   const normalizedCurrent = requireNormalizedCatalog(
     current,
     baseProducts,
@@ -335,6 +356,7 @@ function finalizeCatalogMutation(
   const normalizedCandidate = requireNormalizedCatalog(
     {
       ...candidate,
+      schemaVersion: 2,
       revision: normalizedCurrent.revision + 1,
       updatedAt: now,
     },
@@ -347,13 +369,13 @@ function finalizeCatalogMutation(
 }
 
 export function updateBaseProduct(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   productId: string,
   input: BaseProductEditInput,
   now = new Date().toISOString(),
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   const baseProduct = baseProducts.find((product) => product.id === productId)
   if (!baseProduct) {
     throw new Error('基準商品が見つかりません。')
@@ -367,6 +389,7 @@ export function updateBaseProduct(
         unit: input.unit,
         categoryId: input.categoryId,
         hidden: input.hidden,
+        defaultMemo: input.defaultMemo ?? catalog.overrides[productId]?.defaultMemo,
       },
     },
   }
@@ -374,12 +397,12 @@ export function updateBaseProduct(
 }
 
 export function resetBaseProduct(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   productId: string,
   now = new Date().toISOString(),
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   if (!baseProducts.some((product) => product.id === productId)) {
     throw new Error('基準商品が見つかりません。')
   }
@@ -395,7 +418,7 @@ export function resetBaseProduct(
 }
 
 export function addHouseholdProduct(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   input: HouseholdProductInput,
   now = new Date().toISOString(),
   baseProducts: readonly Product[] = products,
@@ -406,11 +429,11 @@ export function addHouseholdProduct(
       ...catalog.addedProducts.map((product) => product.id),
     ]),
   ),
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   if (catalog.addedProducts.length >= MAX_HOUSEHOLD_PRODUCTS) {
     throw new Error('家庭用商品の登録上限に達しています。')
   }
-  const candidate: HouseholdCatalogV1 = {
+  const candidate: HouseholdCatalog = {
     ...catalog,
     addedProducts: [
       ...catalog.addedProducts,
@@ -420,6 +443,7 @@ export function addHouseholdProduct(
         unit: input.unit,
         categoryId: input.categoryId,
         hidden: input.hidden ?? false,
+        ...(input.defaultMemo !== undefined ? { defaultMemo: input.defaultMemo } : {}),
         createdAt: now,
         updatedAt: now,
       },
@@ -429,17 +453,17 @@ export function addHouseholdProduct(
 }
 
 export function updateHouseholdProduct(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   productId: string,
   input: HouseholdProductInput,
   now = new Date().toISOString(),
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   if (!catalog.addedProducts.some((product) => product.id === productId)) {
     throw new Error('家庭用商品が見つかりません。')
   }
-  const candidate: HouseholdCatalogV1 = {
+  const candidate: HouseholdCatalog = {
     ...catalog,
     addedProducts: catalog.addedProducts.map((product) =>
       product.id === productId
@@ -449,6 +473,7 @@ export function updateHouseholdProduct(
             unit: input.unit,
             categoryId: input.categoryId,
             hidden: input.hidden ?? product.hidden,
+            defaultMemo: input.defaultMemo ?? product.defaultMemo,
             updatedAt: now,
           }
         : product,
@@ -458,13 +483,13 @@ export function updateHouseholdProduct(
 }
 
 export function setCatalogProductHidden(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   productId: string,
   hidden: boolean,
   now = new Date().toISOString(),
   baseProducts: readonly Product[] = products,
   categoryList: readonly Category[] = categories,
-): HouseholdCatalogV1 {
+): HouseholdCatalog {
   const baseProduct = baseProducts.find((product) => product.id === productId)
   if (baseProduct) {
     const effective = buildAllEffectiveProductCatalog(
@@ -511,7 +536,7 @@ export function setCatalogProductHidden(
 
 export function buildAllEffectiveProductCatalog(
   baseProducts: readonly Product[],
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   categoryList: readonly Category[] = categories,
 ): EffectiveProduct[] {
   const normalized = requireNormalizedCatalog(catalog, baseProducts, categoryList)
@@ -523,6 +548,7 @@ export function buildAllEffectiveProductCatalog(
       name: override?.name ?? product.name,
       unit: override?.unit ?? product.unit,
       categoryId: override?.categoryId ?? product.categoryId,
+      memo: override?.defaultMemo ?? product.memo,
       source: 'base',
       hidden: override?.hidden ?? false,
       isCustomized: Boolean(override && Object.keys(override).length > 0),
@@ -536,6 +562,7 @@ export function buildAllEffectiveProductCatalog(
       defaultQuantity: 1,
       unit: product.unit,
       icon: '🛒',
+      memo: product.defaultMemo,
       sortOrder: 0,
       source: 'household',
       hidden: product.hidden,
@@ -594,7 +621,7 @@ function baseProductsById(
 
 export function buildEffectiveProductCatalog(
   baseProducts: readonly Product[],
-  householdCatalog: HouseholdCatalogV1,
+  householdCatalog: HouseholdCatalog,
 ): EffectiveProduct[] {
   return buildAllEffectiveProductCatalog(baseProducts, householdCatalog).filter(
     (product) => !product.hidden,

@@ -596,7 +596,7 @@ describe('CreateRequestPage product photo sharing', () => {
       '2026-08-01T00:01:00.000Z',
     )
     window.localStorage.setItem(
-      'otsukai:householdCatalog:v1',
+      'otsukai:householdCatalog:v2',
       JSON.stringify(catalog),
     )
     window.localStorage.setItem(

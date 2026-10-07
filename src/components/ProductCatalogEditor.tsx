@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   MAX_CUSTOM_ITEM_NAME_CHARS,
   MAX_CUSTOM_ITEM_UNIT_CHARS,
+  MAX_ITEM_CONDITION_CHARS,
 } from '../constants/requestLimits'
 import { categories } from '../data/categories'
 import type { EffectiveProduct } from '../types/householdCatalog'
@@ -30,6 +31,7 @@ export function ProductCatalogEditor({
 }: ProductCatalogEditorProps) {
   const [name, setName] = useState(product?.name ?? '')
   const [unit, setUnit] = useState(product?.unit ?? '個')
+  const [defaultMemo, setDefaultMemo] = useState(product?.memo ?? '')
   const [categoryId, setCategoryId] = useState(
     product?.categoryId ?? 'other',
   )
@@ -60,7 +62,7 @@ export function ProductCatalogEditor({
       onClose={onCancel}
     >
       <p id={descriptionId} className="shopping-dialog-description">
-        家庭で使う商品名、単位、カテゴリを設定します。
+        家庭で使う商品名、単位、カテゴリ、いつもの条件を設定します。
       </p>
       <div className="catalog-editor-fields">
         <label className="stack-field">
@@ -100,6 +102,26 @@ export function ProductCatalogEditor({
         </label>
 
         <label className="stack-field">
+          <span>いつもの条件</span>
+          <ImeAwareTextInput
+            value={defaultMemo}
+            aria-describedby="catalog-product-memo-help catalog-product-memo-count"
+            onCommit={(value) =>
+              commitText(value, defaultMemo, MAX_ITEM_CONDITION_CHARS, setDefaultMemo)
+            }
+          />
+          <span id="catalog-product-memo-help" className="helper-text">
+            次の新しい依頼に入ります。作成中・共有済みの依頼は変わりません。今回だけの変更は依頼画面で行えます。
+          </span>
+          <span id="catalog-product-memo-count" className="character-count">
+            {countUserCharacters(defaultMemo)} / {MAX_ITEM_CONDITION_CHARS}
+          </span>
+          {countUserCharacters(defaultMemo) >= MAX_ITEM_CONDITION_CHARS ? (
+            <span className="limit-inline-message">いつもの条件は30文字までです。</span>
+          ) : null}
+        </label>
+
+        <label className="stack-field">
           <span>カテゴリ</span>
           <select
             value={categoryId}
@@ -128,6 +150,7 @@ export function ProductCatalogEditor({
               unit,
               categoryId,
               hidden: product?.hidden ?? false,
+              ...(defaultMemo !== (product?.memo ?? '') ? { defaultMemo } : {}),
             })
           }
         >

@@ -3,7 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { HouseholdCatalogV1 } from '../types/householdCatalog'
+import type { HouseholdCatalog } from '../types/householdCatalog'
 import {
   createEmptyHouseholdCatalog,
   updateBaseProduct,
@@ -12,7 +12,7 @@ import { CatalogBackupStatus } from './CatalogBackupStatus'
 
 const NOW = '2026-07-26T00:00:00.000Z'
 
-function createChangedCatalog(): HouseholdCatalogV1 {
+function createChangedCatalog(): HouseholdCatalog {
   return updateBaseProduct(
     createEmptyHouseholdCatalog(NOW),
     'milk',
@@ -26,7 +26,7 @@ function createChangedCatalog(): HouseholdCatalogV1 {
   )
 }
 
-function createOversizedCatalog(): HouseholdCatalogV1 {
+function createOversizedCatalog(): HouseholdCatalog {
   return {
     schemaVersion: 1,
     revision: 200,
@@ -124,7 +124,7 @@ describe('CatalogBackupStatus', () => {
     await click(button('復旧リンクを保存'))
     await click(button('保存した'))
     expect(onConfirmBackup).toHaveBeenCalledTimes(1)
-    expect(onConfirmBackup.mock.calls[0][0]).toMatch(/^catalog-v1-/)
+    expect(onConfirmBackup.mock.calls[0][0]).toMatch(/^catalog-v2-/)
   })
 
   it('keeps the catalog unbacked when native sharing is cancelled', async () => {
