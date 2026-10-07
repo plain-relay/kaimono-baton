@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react'
-import type { CatalogRecoveryPayloadV1 } from '../types/householdCatalog'
+import type { CatalogRecoveryPayload } from '../types/householdCatalog'
 import { createCatalogRecoveryPreview } from '../utils/catalogRecovery'
 
 type CatalogRecoveryPreviewProps = {
-  payload: CatalogRecoveryPayloadV1
+  payload: CatalogRecoveryPayload
   isOlderThanCurrent: boolean
   isRestoring?: boolean
   errorMessage?: string
@@ -71,6 +71,10 @@ export function CatalogRecoveryPreview({
         <div>
           <dt>追加商品</dt>
           <dd>{preview.added}件</dd>
+        </div>
+        <div>
+          <dt>いつもの条件</dt>
+          <dd>{preview.conditions}件</dd>
         </div>
       </dl>
 

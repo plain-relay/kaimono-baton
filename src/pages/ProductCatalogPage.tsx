@@ -7,7 +7,7 @@ import { MAX_CATALOG_RECOVERY_JSON_BYTES } from '../constants/requestLimits'
 import { categories } from '../data/categories'
 import { useHouseholdCatalog } from '../hooks/useHouseholdCatalog'
 import type {
-  CatalogRecoveryPayloadV1,
+  CatalogRecoveryPayload,
   EffectiveProduct,
 } from '../types/householdCatalog'
 import {
@@ -46,7 +46,7 @@ export function ProductCatalogPage({
     string | 'new' | null
   >(null)
   const [recoveryPayload, setRecoveryPayload] =
-    useState<CatalogRecoveryPayloadV1 | null>(null)
+    useState<CatalogRecoveryPayload | null>(null)
   const [notice, setNotice] = useState('')
   const normalizedQuery = query.trim().toLocaleLowerCase('ja')
 
@@ -138,6 +138,7 @@ export function ProductCatalogPage({
               unit: input.unit,
               categoryId: input.categoryId,
               hidden: input.hidden ?? false,
+              defaultMemo: input.defaultMemo,
             })
           : updateHouseholdProduct(
               catalog,

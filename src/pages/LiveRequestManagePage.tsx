@@ -106,7 +106,10 @@ export function LiveRequestManagePage({
   const [addName, setAddName] = useState('')
   const [addUnit, setAddUnit] = useState('個')
   const [addQuantity, setAddQuantity] = useState(1)
-  const [addMemo, setAddMemo] = useState('')
+  const [catalogAddMemo, setCatalogAddMemo] = useState('')
+  const [customAddMemo, setCustomAddMemo] = useState('')
+  const addMemo = addMode === 'catalog' ? catalogAddMemo : customAddMemo
+  const setAddMemo = addMode === 'catalog' ? setCatalogAddMemo : setCustomAddMemo
 
   const applySnapshot = useCallback(
     (next: LiveRequestSnapshot, preserveInputs: boolean) => {
@@ -334,7 +337,8 @@ export function LiveRequestManagePage({
       setAddName('')
       setAddUnit('個')
       setAddQuantity(1)
-      setAddMemo('')
+      setCatalogAddMemo('')
+      setCustomAddMemo('')
     }
   }
 
@@ -406,7 +410,13 @@ export function LiveRequestManagePage({
                 商品
                 <select
                   value={addProductId}
-                  onChange={(event) => setAddProductId(event.currentTarget.value)}
+                  onChange={(event) => {
+                    const productId = event.currentTarget.value
+                    setAddProductId(productId)
+                    setAddMemo(
+                      effectiveProducts.find((product) => product.id === productId)?.memo ?? '',
+                    )
+                  }}
                   disabled={isUpdating || isExpired}
                 >
                   <option value="">選択してください</option>
@@ -478,6 +488,7 @@ export function LiveRequestManagePage({
               条件
               <ImeAwareTextInput
                 value={addMemo}
+                aria-label="追加商品の条件"
                 onCommit={(candidate) => {
                   const value = truncateUserCharacters(candidate, 30)
                   setAddMemo(value)

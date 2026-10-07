@@ -34,6 +34,7 @@ function CatalogProductRow({
             単位: {product.unit}
             {product.isCustomized ? '・変更済み' : ''}
           </small>
+          {product.memo ? <small>いつもの条件: {product.memo}</small> : null}
         </span>
       </span>
       <span className="catalog-product-actions">

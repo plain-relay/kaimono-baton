@@ -1,11 +1,11 @@
 import type {
   CatalogBackupReceipt,
-  HouseholdCatalogV1,
+  HouseholdCatalog,
 } from '../types/householdCatalog'
 
 export type CatalogBackupStatus = 'standard' | 'backed-up' | 'unbacked'
 
-export function canonicalizeCatalogContent(catalog: HouseholdCatalogV1): string {
+export function canonicalizeCatalogContent(catalog: HouseholdCatalog): string {
   const overrides = Object.keys(catalog.overrides)
     .sort()
     .map((productId) => {
@@ -16,6 +16,7 @@ export function canonicalizeCatalogContent(catalog: HouseholdCatalogV1): string 
         override.unit ?? null,
         override.categoryId ?? null,
         override.hidden ?? null,
+        override.defaultMemo ?? null,
       ]
     })
   const addedProducts = [...catalog.addedProducts]
@@ -26,8 +27,9 @@ export function canonicalizeCatalogContent(catalog: HouseholdCatalogV1): string 
       product.unit,
       product.categoryId,
       product.hidden,
+      product.defaultMemo ?? null,
     ])
-  return JSON.stringify([1, overrides, addedProducts])
+  return JSON.stringify([2, overrides, addedProducts])
 }
 
 function fnv1a64(value: string): string {
@@ -41,12 +43,12 @@ function fnv1a64(value: string): string {
   return hash.toString(16).padStart(16, '0')
 }
 
-export function createCatalogFingerprint(catalog: HouseholdCatalogV1): string {
-  return `catalog-v1-${fnv1a64(canonicalizeCatalogContent(catalog))}`
+export function createCatalogFingerprint(catalog: HouseholdCatalog): string {
+  return `catalog-v2-${fnv1a64(canonicalizeCatalogContent(catalog))}`
 }
 
 export function hasHouseholdCatalogChanges(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
 ): boolean {
   return (
     Object.keys(catalog.overrides).length > 0 ||
@@ -55,7 +57,7 @@ export function hasHouseholdCatalogChanges(
 }
 
 export function getCatalogBackupStatus(
-  catalog: HouseholdCatalogV1,
+  catalog: HouseholdCatalog,
   receipt: CatalogBackupReceipt | null,
 ): CatalogBackupStatus {
   if (!hasHouseholdCatalogChanges(catalog)) {

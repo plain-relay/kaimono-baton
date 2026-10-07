@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { categories } from '../data/categories'
 import { products } from '../data/products'
+import { createDraftState } from './createRequestState'
+import { buildSelectedRequestItems } from './selectedRequestItems'
+import { createCatalogFingerprint, getCatalogBackupStatus } from './catalogFingerprint'
 import {
   addHouseholdProduct,
   buildAllEffectiveProductCatalog,
@@ -18,6 +21,64 @@ const LATER = '2026-07-26T01:00:00.000Z'
 const HOUSEHOLD_ID = 'household:123e4567-e89b-42d3-a456-426614174000'
 
 describe('household catalog domain', () => {
+  it('resolves household defaults without overwriting drafts or previous snapshots', () => {
+    const base = products.map((product) => product.id === 'milk'
+      ? { ...product, memo: '基準条件' } : product)
+    const empty = createEmptyHouseholdCatalog(NOW)
+    const input = { name: '牛乳', unit: '本', categoryId: 'eggs-dairy', hidden: false }
+    const first = updateBaseProduct(empty, 'milk', { ...input, defaultMemo: ' 国産 ' }, LATER, base)
+    const effective = buildAllEffectiveProductCatalog(base, first)
+    const draft = createDraftState(undefined, effective)
+    draft.milk.quantity = 1
+    const shared = buildSelectedRequestItems(effective, draft, [])
+    expect(shared[0].memo).toBe('国産')
+    draft.milk.memo = ''
+    const next = updateBaseProduct(first, 'milk', { ...input, defaultMemo: '低脂肪' }, LATER, base)
+    const nextProducts = buildAllEffectiveProductCatalog(base, next)
+    expect(createDraftState(draft, nextProducts).milk.memo).toBe('')
+    expect(createDraftState({ milk: { quantity: 1, memo: '今回だけ' } }, nextProducts).milk.memo).toBe('今回だけ')
+    expect(createDraftState(undefined, nextProducts).milk.memo).toBe('低脂肪')
+    expect(shared[0].memo).toBe('国産')
+    const cleared = updateBaseProduct(next, 'milk', { ...input, defaultMemo: '' }, LATER, base)
+    expect(cleared.overrides.milk.defaultMemo).toBe('')
+    expect(buildAllEffectiveProductCatalog(base, cleared).find(p => p.id === 'milk')?.memo).toBe('')
+    expect(buildAllEffectiveProductCatalog(base, resetBaseProduct(cleared, 'milk', LATER, base)).find(p => p.id === 'milk')?.memo).toBe('基準条件')
+  })
+
+  it('preserves usual conditions during hiding and detects condition-only edits for backup', () => {
+    const input = { name: '牛乳', unit: '本', categoryId: 'eggs-dairy', hidden: false, defaultMemo: '国産' }
+    let catalog = updateBaseProduct(createEmptyHouseholdCatalog(NOW), 'milk', input, LATER)
+    catalog = addHouseholdProduct(catalog, { name: '家庭商品', unit: '袋', categoryId: 'other', defaultMemo: '無香料' }, LATER, products, categories, HOUSEHOLD_ID)
+    const receipt = { catalogFingerprint: createCatalogFingerprint(catalog), confirmedAt: NOW }
+    const hidden = setCatalogProductHidden(setCatalogProductHidden(catalog, 'milk', true, LATER), HOUSEHOLD_ID, true, LATER)
+    const restored = setCatalogProductHidden(setCatalogProductHidden(hidden, 'milk', false, LATER), HOUSEHOLD_ID, false, LATER)
+    expect(restored.overrides.milk.defaultMemo).toBe('国産')
+    expect(restored.addedProducts[0].defaultMemo).toBe('無香料')
+    const changed = updateHouseholdProduct(catalog, HOUSEHOLD_ID, { name: '家庭商品', unit: '袋', categoryId: 'other', defaultMemo: '詰め替え' }, LATER)
+    expect(changed.revision).toBe(catalog.revision + 1)
+    expect(getCatalogBackupStatus(changed, receipt)).toBe('unbacked')
+    expect(updateHouseholdProduct(changed, HOUSEHOLD_ID, { name: '家庭商品', unit: '袋', categoryId: 'other', defaultMemo: '詰め替え' }, NOW)).toEqual(changed)
+    const baseChanged = updateBaseProduct(catalog, 'milk', { ...input, defaultMemo: '低脂肪' }, LATER)
+    expect(baseChanged.revision).toBe(catalog.revision + 1)
+    expect(getCatalogBackupStatus(baseChanged, receipt)).toBe('unbacked')
+  })
+
+  it('strictly validates condition versions, types, character limits and malformed products', () => {
+    const empty = createEmptyHouseholdCatalog(NOW)
+    const value = { ...empty, overrides: { milk: { defaultMemo: '🛒'.repeat(30) } } }
+    expect(normalizeHouseholdCatalog(value)?.overrides.milk.defaultMemo).toBe('🛒'.repeat(30))
+    expect(normalizeHouseholdCatalog({ ...empty, overrides: { milk: { defaultMemo: '' } } })?.overrides.milk.defaultMemo).toBe('')
+    for (const defaultMemo of [null, 4, '🛒'.repeat(31)]) {
+      expect(normalizeHouseholdCatalog({ ...empty, overrides: { milk: { defaultMemo } } })).toBeNull()
+    }
+    expect(normalizeHouseholdCatalog({ ...value, schemaVersion: 1 })).toBeNull()
+    expect(normalizeHouseholdCatalog({ ...empty, schemaVersion: 3 })).toBeNull()
+    expect(normalizeHouseholdCatalog({ ...empty, addedProducts: [null] })).toBeNull()
+    const added = addHouseholdProduct(empty, { name: '商品', unit: '個', categoryId: 'other', defaultMemo: '' }, LATER, products, categories, HOUSEHOLD_ID)
+    expect(normalizeHouseholdCatalog({ ...added, schemaVersion: 1 })).toBeNull()
+    expect(() => addHouseholdProduct(empty, { name: '商品', unit: '個', categoryId: 'other', defaultMemo: 'あ'.repeat(31) })).toThrow()
+  })
+
   it('applies base name, unit, and category changes as minimal overrides', () => {
     const changed = updateBaseProduct(
       createEmptyHouseholdCatalog(NOW),

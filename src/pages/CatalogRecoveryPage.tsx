@@ -77,7 +77,7 @@ export function CatalogRecoveryPage({
           <p className="eyebrow">復元が完了しました</p>
           <h1>商品リストを置き換えました</h1>
           <p>
-            復元した商品名・単位・カテゴリ・表示設定を、依頼作成で利用できます。
+            復元した商品名・単位・カテゴリ・表示設定・いつもの条件を、依頼作成で利用できます。
           </p>
           <div className="catalog-recovery-actions">
             <button

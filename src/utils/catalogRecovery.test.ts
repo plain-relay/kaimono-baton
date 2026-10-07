@@ -48,6 +48,22 @@ function createChangedCatalog() {
 }
 
 describe('catalog recovery data', () => {
+  it('round-trips V2 defaults including empty overrides and accepts original V1 links and JSON', () => {
+    const catalog = updateBaseProduct(createChangedCatalog(), 'apple', { name: 'りんご', unit: '玉', categoryId: 'vegetables', hidden: false, defaultMemo: '' }, LATER)
+    catalog.addedProducts[0].defaultMemo = '無香料'
+    const bundle = createCatalogRecoveryBundle('https://example.test/', catalog, LATER)
+    expect(bundle.payload.version).toBe(2)
+    expect(parseCatalogRecoveryJson(bundle.json).catalog).toEqual(catalog)
+    expect(decodeCatalogRecoveryPayload(bundle.encoded).catalog).toEqual(catalog)
+    expect(createCatalogRecoveryPreview(bundle.payload).conditions).toBe(2)
+    const legacyCatalog = { ...createEmptyHouseholdCatalog(NOW), schemaVersion: 1, overrides: { milk: { name: '旧商品' } } }
+    const json = JSON.stringify({ version: 1, createdAt: NOW, catalog: legacyCatalog })
+    expect(parseCatalogRecoveryJson(json).catalog).toEqual(legacyCatalog)
+    expect(decodeCatalogRecoveryPayload(compressToEncodedURIComponent(json)).catalog).toEqual(legacyCatalog)
+    expect(() => parseCatalogRecoveryJson(JSON.stringify({ version: 1, createdAt: NOW, catalog }))).toThrow()
+    expect(() => parseCatalogRecoveryJson(JSON.stringify({ version: 2, createdAt: NOW, catalog: legacyCatalog }))).toThrow()
+  })
+
   it('round-trips compressed links and JSON through the same validator', () => {
     const catalog = createChangedCatalog()
     const bundle = createCatalogRecoveryBundle(
@@ -72,7 +88,7 @@ describe('catalog recovery data', () => {
       decodeCatalogRecoveryPayload(
         compressToEncodedURIComponent(
           JSON.stringify({
-            version: 2,
+            version: 3,
             createdAt: NOW,
             catalog: createEmptyHouseholdCatalog(NOW),
           }),
@@ -170,6 +186,7 @@ describe('catalog recovery data', () => {
       categoryChanged: 1,
       hidden: 2,
       added: 1,
+      conditions: 0,
     })
     expect(
       isRecoveryPayloadOlderThanCatalog(bundle.payload, {

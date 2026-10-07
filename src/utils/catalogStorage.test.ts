@@ -3,6 +3,8 @@ import {
   CATALOG_BACKUP_RECEIPT_KEY,
   HOUSEHOLD_CATALOG_KEY,
   HOUSEHOLD_CATALOG_PREVIOUS_KEY,
+  LEGACY_HOUSEHOLD_CATALOG_KEY,
+  LEGACY_HOUSEHOLD_CATALOG_PREVIOUS_KEY,
   loadCatalogBackupReceipt,
   loadHouseholdCatalog,
   saveCatalogBackupReceipt,
@@ -56,6 +58,65 @@ class FailOnceStorage extends MemoryStorage {
 }
 
 describe('household catalog storage', () => {
+  it('does not overwrite unreadable saved generations or fall back to V1 after a V2 read error', () => {
+    const storage = new MemoryStorage()
+    const catalog = createEmptyHouseholdCatalog(NOW)
+    const raw = JSON.stringify(catalog)
+    storage.setItem(HOUSEHOLD_CATALOG_KEY, raw)
+    storage.setItem(HOUSEHOLD_CATALOG_PREVIOUS_KEY, raw)
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_KEY, JSON.stringify({ ...catalog, schemaVersion: 1 }))
+    const get = storage.getItem.bind(storage)
+    storage.getItem = (key) => {
+      if (key === HOUSEHOLD_CATALOG_KEY || key === HOUSEHOLD_CATALOG_PREVIOUS_KEY) throw new Error('blocked')
+      return get(key)
+    }
+    expect(loadHouseholdCatalog(storage)).toMatchObject({ source: 'default' })
+    expect(saveHouseholdCatalog(catalog, storage).ok).toBe(false)
+    storage.getItem = get
+    expect(storage.getItem(HOUSEHOLD_CATALOG_KEY)).toBe(raw)
+    expect(storage.getItem(HOUSEHOLD_CATALOG_PREVIOUS_KEY)).toBe(raw)
+  })
+
+  it('reads V1 non-destructively and saves V2 separately only after an explicit edit', () => {
+    const storage = new MemoryStorage()
+    const legacy = { ...createEmptyHouseholdCatalog(NOW), schemaVersion: 1 as const, overrides: { milk: { name: '旧設定' } } }
+    const raw = JSON.stringify(legacy)
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_KEY, raw)
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_PREVIOUS_KEY, raw)
+    const loaded = loadHouseholdCatalog(storage)
+    expect(loaded).toEqual({ catalog: { ...legacy, schemaVersion: 2 }, source: 'legacy', recovered: false })
+    expect(storage.getItem(HOUSEHOLD_CATALOG_KEY)).toBeNull()
+    const changed = updateBaseProduct(loaded.catalog, 'milk', { name: '旧設定', unit: '本', categoryId: 'eggs-dairy', hidden: false, defaultMemo: '国産' }, NOW)
+    expect(saveHouseholdCatalog(changed, storage).ok).toBe(true)
+    expect(storage.getItem(LEGACY_HOUSEHOLD_CATALOG_KEY)).toBe(raw)
+    expect(storage.getItem(LEGACY_HOUSEHOLD_CATALOG_PREVIOUS_KEY)).toBe(raw)
+    // A still-open old tab cannot overwrite new conditions through the V1 key.
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_KEY, JSON.stringify({ ...legacy, overrides: {} }))
+    expect(loadHouseholdCatalog(storage).catalog).toEqual(changed)
+  })
+
+  it('uses legacy previous generation without overwriting legacy current and rejects V2 disguised as V1', () => {
+    const storage = new MemoryStorage()
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_KEY, '{broken')
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_PREVIOUS_KEY, JSON.stringify({ ...createEmptyHouseholdCatalog(NOW), schemaVersion: 1 }))
+    expect(loadHouseholdCatalog(storage)).toMatchObject({ source: 'legacy', recovered: true })
+    expect(storage.getItem(LEGACY_HOUSEHOLD_CATALOG_KEY)).toBe('{broken')
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_PREVIOUS_KEY, JSON.stringify({ ...createEmptyHouseholdCatalog(NOW), schemaVersion: 1, overrides: { milk: { defaultMemo: '国産' } } }))
+    expect(loadHouseholdCatalog(storage)).toMatchObject({ source: 'default' })
+  })
+
+  it('recovers V2 conditions from previous but never resurrects stale V1 after V2 corruption', () => {
+    const storage = new MemoryStorage()
+    const catalog = updateBaseProduct(createEmptyHouseholdCatalog(NOW), 'milk', { name: '牛乳', unit: '本', categoryId: 'eggs-dairy', hidden: false, defaultMemo: '国産' }, NOW)
+    storage.setItem(HOUSEHOLD_CATALOG_KEY, '{broken')
+    storage.setItem(HOUSEHOLD_CATALOG_PREVIOUS_KEY, JSON.stringify(catalog))
+    expect(loadHouseholdCatalog(storage).catalog).toEqual(catalog)
+    storage.setItem(HOUSEHOLD_CATALOG_KEY, '{broken')
+    storage.setItem(HOUSEHOLD_CATALOG_PREVIOUS_KEY, '{broken')
+    storage.setItem(LEGACY_HOUSEHOLD_CATALOG_KEY, JSON.stringify({ ...catalog, schemaVersion: 1, overrides: {} }))
+    expect(loadHouseholdCatalog(storage)).toMatchObject({ source: 'default' })
+  })
+
   it('saves the current catalog, preserves the previous generation, and verifies the write', () => {
     const storage = new MemoryStorage()
     const empty = createEmptyHouseholdCatalog(NOW)
