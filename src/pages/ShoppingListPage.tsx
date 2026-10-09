@@ -39,9 +39,9 @@ import {
 } from '../utils/shoppingPageView'
 import {
   getItemStatus,
-  getShoppingCompletionState,
   hasCondition,
 } from '../utils/shoppingState'
+import { getShoppingCheckoutDecision } from '../utils/shoppingCheckout'
 import {
   loadShoppingSession,
   reconcileShoppingSession,
@@ -649,24 +649,20 @@ export function ShoppingListPage({
 
   const finishWithCurrentList = () => {
     const current = liveSync.getCurrentState()
-    if (liveRequestToken && (current.pendingChanges.length > 0 ||
-        current.status === 'checking' || current.status === 'loading' ||
-        current.snapshot?.requestId !== payload?.requestId)) return
-    const latestItems = liveRequestToken && current.snapshot
-      ? liveRequestToShoppingPayload(current.snapshot).items.filter(
-          (item) => item.liveLifecycle !== 'cancelled-by-requester',
-        )
-      : sortedItems
-    const latestCompletionState = getShoppingCompletionState(
-      latestItems,
-      getCurrentShoppingState().checkedState,
-      getCurrentConsultations(),
-    )
-    if (!latestCompletionState.canFinish) {
+    const decision = getShoppingCheckoutDecision({
+      requestId: payload?.requestId,
+      items: sortedItems,
+      checkedState: getCurrentShoppingState().checkedState,
+      consultations: getCurrentConsultations(),
+      live: liveRequestToken ? current : undefined,
+      // Called after a successful freshness check or an explicit offline choice.
+      allowUnconfirmedLive: true,
+    })
+    if (decision.outcome !== 'finish') {
       return
     }
 
-    setShareNotice(liveRequestToken && current.status !== 'current'
+    setShareNotice(!decision.latestConfirmed
       ? { kind: 'info', message: '最新の依頼は未確認です。保存済みのリストで買い物を終了しました。' }
       : null)
     setIsCompletionView(true)
@@ -688,12 +684,20 @@ export function ShoppingListPage({
     setShowOfflineFinishChoice(false)
     try {
       const current = await liveSync.refresh()
-      if (current.snapshot?.requestId !== expectedRequestId) return
-      if (current.pendingChanges.length > 0) {
-        setShareNotice({kind: 'info', message: '新しい変更があります。内容を確認してから終了してください。'})
+      const decision = getShoppingCheckoutDecision({
+        requestId: expectedRequestId,
+        items: sortedItems,
+        checkedState: getCurrentShoppingState().checkedState,
+        consultations: getCurrentConsultations(),
+        live: current,
+      })
+      if (decision.outcome === 'blocked') {
+        if (decision.reason === 'changes-pending') {
+          setShareNotice({kind: 'info', message: '新しい変更があります。内容を確認してから終了してください。'})
+        }
         return
       }
-      if (current.status !== 'current') {
+      if (decision.outcome === 'offline-confirmation-required') {
         setShowOfflineFinishChoice(true)
         return
       }

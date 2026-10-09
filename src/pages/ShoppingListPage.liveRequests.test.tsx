@@ -98,17 +98,18 @@ describe('ShoppingListPage live request synchronization', () => {
       endpoint: '',
       turnstileSiteKey: '',
     },
+    currentRequestToken = requestToken,
   ): Promise<void> {
     await act(async () => {
       root.render(
         <ShoppingListPage
-          encodedPayload={requestToken}
+          encodedPayload={currentRequestToken}
           payloadCodec="compact-path"
           onBackHome={() => undefined}
           onError={(title, description) => {
             throw new Error(`${title}: ${description}`)
           }}
-          liveRequestToken={requestToken}
+          liveRequestToken={currentRequestToken}
           liveRequestApi={api}
           productPhotoConfig={productPhotoConfig}
         />,
@@ -523,5 +524,32 @@ describe('ShoppingListPage live request synchronization', () => {
     await focusRefresh()
     expect(container.textContent).not.toContain('おつかい完了')
     expect(container.textContent).toContain('数量 1 → 2')
+  })
+
+  it('does not complete another request when an older checkout refresh is interrupted by navigation', async () => {
+    await renderPage()
+    await click(button('1本をかごに入れる'))
+    await click(button('会計前チェックへ'))
+    let resolve!: (result: LiveRequestGetResult) => void
+    vi.mocked(api.get).mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    await act(async () => {
+      button('買い物を終了する').click()
+      await Promise.resolve()
+    })
+    const nextToken = `r1_${'B'.repeat(32)}`
+    const nextRequestId = `v5-${nextToken}`
+    window.localStorage.setItem(`otsukai:checked:${nextRequestId}`, JSON.stringify({ 'item-1': 'inCart' }))
+    vi.mocked(api.get).mockResolvedValue({
+      status: 'found', request: { ...snapshot(), requestId: nextRequestId }, etag: '"revision-1"',
+    })
+    await renderPage(undefined, nextToken)
+    await act(async () => {
+      resolve({ status: 'not-modified', etag: '"revision-1"' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.textContent).not.toContain('おつかい完了')
+    expect(JSON.parse(window.localStorage.getItem(`otsukai:checked:${nextRequestId}`)!)).toEqual({ 'item-1': 'inCart' })
+    expect(storedProgress()['item-1']).toBe('inCart')
   })
 })
