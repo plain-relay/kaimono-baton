@@ -10,7 +10,6 @@ import { RequestLimitNotice } from '../components/RequestLimitNotice'
 import { RequestReviewView } from '../components/RequestReviewView'
 import { HiddenSelectedProductsSection } from '../components/HiddenSelectedProductsSection'
 import {
-  loadCreateDraft,
   loadLastSharedUrl,
   saveCreateDraft,
   saveLastSharedUrl,
@@ -20,19 +19,12 @@ import {
   createEmptyDraftState,
   createDraftState,
   createRequestContentSnapshot,
-  createInitialCreateRequestState,
   hasAnyCreateRequestInput,
   resolveSharedRequestUrl,
   toggleExpandedProductId,
 } from '../utils/createRequestState'
 import {
-  applyConditionChange,
-  applyCustomItemAdd,
-  applyCustomItemDelete,
-  applyCustomItemUpdate,
-  applyQuantityChange,
   normalizeCustomQuantity,
-  normalizeRequestDraftData,
   type DraftChangeResult,
 } from '../utils/draftLimits'
 import {
@@ -43,7 +35,6 @@ import {
   validateDraftLimits,
   type CustomRequestDraftItem,
   type DraftLimitReason,
-  type RequestBudgetContext,
   type RequestDraftData,
 } from '../utils/requestBudget'
 import {
@@ -64,15 +55,13 @@ import {
 } from '../utils/requestShareMessage'
 import {
   createRequestShareLock,
+  createRequestShareSnapshot,
   isRequestUrlWithinShareLimit,
 } from '../utils/shareRequest'
 import { shareText } from '../utils/shareText'
 import { buildLineDeliveryRequestUrl } from '../utils/lineDeliveryUrl'
 import {
-  clearCreateRequestReturnState,
-  loadCreateRequestReturnState,
   saveCreateRequestReturnState,
-  type CreateRequestReturnState,
 } from '../utils/createRequestReturnState'
 import {
   getLimitMessage,
@@ -80,8 +69,8 @@ import {
   type ShareMessageStatus,
 } from '../utils/requestNoticeMessages'
 import { useCustomItemEditor } from '../hooks/useCustomItemEditor'
+import { useCreateRequestDraft } from '../hooks/useCreateRequestDraft'
 import { useHouseholdCatalog } from '../hooks/useHouseholdCatalog'
-import type { EffectiveProduct } from '../types/householdCatalog'
 import { buildSelectedRequestItems } from '../utils/selectedRequestItems'
 import { toStableCustomProductId } from '../utils/selectedRequestItems'
 import { HandwritingImportSection } from '../features/handwriting/HandwritingImportSection'
@@ -124,7 +113,6 @@ import {
 } from '../components/RequestSharingModeSection'
 import {
   LIVE_REQUEST_CREATE_TURNSTILE_ACTION,
-  LiveRequestApiError,
   WorkerLiveRequestApi,
 } from '../features/liveRequests/api'
 import {
@@ -135,6 +123,10 @@ import {
   buildLiveRequestItems,
   buildLiveRequestUrls,
 } from '../features/liveRequests/createItems'
+import {
+  getLiveRequestFailureMessage,
+  resolveLiveRequestShare,
+} from '../features/liveRequests/sharePreparation'
 import type { LiveRequestApi } from '../features/liveRequests/types'
 import { addManualValidationSessionToBaseUrl } from '../features/manualValidation/session'
 
@@ -205,40 +197,6 @@ type CreateMode = 'edit' | 'review'
 
 type CustomItem = CustomRequestDraftItem
 
-type InitialPageState = {
-  draft: CreateDraftState
-  expandedProductIds: Set<string>
-  customItems: CustomItem[]
-  returnState?: CreateRequestReturnState
-  wasNormalized: boolean
-}
-
-function createInitialPageState(
-  effectiveProducts: readonly EffectiveProduct[],
-): InitialPageState {
-  const returnState = loadCreateRequestReturnState()
-  const initialDraft = createInitialCreateRequestState(
-    loadCreateDraft(),
-    effectiveProducts,
-  )
-  const normalized = normalizeRequestDraftData({
-    title: FIXED_REQUEST_TITLE,
-    draft: initialDraft.draft,
-    customItems: returnState?.customItems ?? [],
-    effectiveProducts,
-  })
-
-  return {
-    draft: normalized.value.draft,
-    expandedProductIds: new Set(
-      returnState?.expandedProductIds ?? initialDraft.expandedProductIds,
-    ),
-    customItems: [...normalized.value.customItems],
-    returnState,
-    wasNormalized: initialDraft.wasNormalized || normalized.normalized,
-  }
-}
-
 export function CreateRequestPage({
   onBackHome,
   handwritingImportConfig,
@@ -260,10 +218,28 @@ export function CreateRequestPage({
   const liveConfig = liveRequestConfig ?? getLiveRequestConfig()
   const manualValidationSessionToken =
     photoConfig.validationSessionToken ?? liveConfig.validationSessionToken
-  const [initialPageState] = useState(() =>
-    createInitialPageState(effectiveProducts),
+  const [requestKey, setRequestKey] = useState(createRequestKey)
+  const requestBaseUrl = useMemo(
+    () => `${window.location.origin}${window.location.pathname}`,
+    [],
   )
-  const [draft, setDraft] = useState<CreateDraftState>(initialPageState.draft)
+  const budgetContext = useMemo(
+    () => ({ baseUrl: requestBaseUrl, requestKey }),
+    [requestBaseUrl, requestKey],
+  )
+  const {
+    initialPageState,
+    draft,
+    customItems,
+    requestData,
+    changeQuantity,
+    changeCondition,
+    previewCustomItem: previewDraftCustomItem,
+    saveCustomItem,
+    deleteCustomItem,
+    applyChange: applyDraftChange,
+    resetDraft,
+  } = useCreateRequestDraft({ effectiveProducts, budgetContext })
   const [expandedProductIds, setExpandedProductIds] = useState<Set<string>>(
     initialPageState.expandedProductIds,
   )
@@ -286,9 +262,6 @@ export function CreateRequestPage({
     initialPageState.wasNormalized ? 'cancelled' : '',
   )
   const [limitMessage, setLimitMessage] = useState('')
-  const [customItems, setCustomItems] = useState<CustomItem[]>(
-    initialPageState.customItems,
-  )
   const {
     isOpen: isCustomFormOpen,
     editingIndex: editingCustomIndex,
@@ -307,7 +280,6 @@ export function CreateRequestPage({
     toggleDetails: toggleCustomDetails,
     reset: closeCustomForm,
   } = useCustomItemEditor()
-  const [requestKey, setRequestKey] = useState(createRequestKey)
   const [isSharingRequest, setIsSharingRequest] = useState(false)
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false)
   const [photoUploadFailed, setPhotoUploadFailed] = useState(false)
@@ -335,10 +307,6 @@ export function CreateRequestPage({
       : {}),
   })
 
-  const requestBaseUrl = useMemo(
-    () => `${window.location.origin}${window.location.pathname}`,
-    [],
-  )
   const validationRequestBaseUrl = useMemo(
     () =>
       addManualValidationSessionToBaseUrl(
@@ -347,32 +315,6 @@ export function CreateRequestPage({
       ),
     [manualValidationSessionToken, requestBaseUrl],
   )
-  const budgetContext = useMemo<RequestBudgetContext>(
-    () => ({ baseUrl: requestBaseUrl, requestKey }),
-    [requestBaseUrl, requestKey],
-  )
-  const requestData = useMemo<RequestDraftData>(
-    () => ({
-      title: FIXED_REQUEST_TITLE,
-      draft,
-      customItems,
-      effectiveProducts,
-    }),
-    [customItems, draft, effectiveProducts],
-  )
-
-  useEffect(() => {
-    saveCreateDraft(draft)
-  }, [draft])
-
-  useEffect(() => {
-    const clearReturnState = () => clearCreateRequestReturnState()
-
-    clearReturnState()
-    window.addEventListener('pageshow', clearReturnState)
-    return () => window.removeEventListener('pageshow', clearReturnState)
-  }, [])
-
   useEffect(() => {
     if (
       !photoConfig.enabled ||
@@ -575,18 +517,10 @@ export function CreateRequestPage({
     [draft, effectiveProducts],
   )
 
-  const applyRequestData = (next: RequestDraftData) => {
-    setDraft(next.draft)
-    setCustomItems([...next.customItems])
-  }
-
   const applyChangeResult = (
     result: DraftChangeResult<RequestDraftData>,
     urlMessage?: string,
   ) => {
-    if (result.accepted) {
-      applyRequestData(result.value)
-    }
     setLimitMessage(
       result.reason === 'url-limit' && urlMessage
         ? urlMessage
@@ -596,12 +530,7 @@ export function CreateRequestPage({
 
   const handleIncrease = (productId: string) => {
     const currentQuantity = draft[productId]?.quantity ?? 0
-    const result = applyQuantityChange(
-      requestData,
-      productId,
-      currentQuantity + 1,
-      budgetContext,
-    )
+    const result = changeQuantity(productId, 1)
     applyChangeResult(
       result,
       currentQuantity === 0
@@ -611,27 +540,14 @@ export function CreateRequestPage({
   }
 
   const handleDecrease = (productId: string) => {
-    const currentQuantity = draft[productId]?.quantity ?? 0
-    applyChangeResult(
-      applyQuantityChange(
-        requestData,
-        productId,
-        currentQuantity - 1,
-        budgetContext,
-      ),
-    )
+    applyChangeResult(changeQuantity(productId, -1))
   }
 
   const handleConditionCommit = (
     productId: string,
     value: string,
   ): CommitTextResult => {
-    const result = applyConditionChange(
-      requestData,
-      { kind: 'product', productId },
-      value,
-      budgetContext,
-    )
+    const result = changeCondition(productId, value)
     applyChangeResult(result)
     return {
       value: result.value.draft[productId]?.memo ?? '',
@@ -668,14 +584,7 @@ export function CreateRequestPage({
   })
 
   const previewCustomItem = (item: CustomItem) =>
-    editingCustomIndex === null
-      ? applyCustomItemAdd(requestData, item, budgetContext)
-      : applyCustomItemUpdate(
-          requestData,
-          editingCustomIndex,
-          item,
-          budgetContext,
-        )
+    previewDraftCustomItem(item, editingCustomIndex)
 
   const applyPendingTextChange = (
     field: 'name' | 'unit' | 'memo',
@@ -767,15 +676,7 @@ export function CreateRequestPage({
       unit: customUnit,
       memo: customMemo,
     }
-    const result =
-      editingCustomIndex === null
-        ? applyCustomItemAdd(requestData, item, budgetContext)
-        : applyCustomItemUpdate(
-            requestData,
-            editingCustomIndex,
-            item,
-            budgetContext,
-          )
+    const result = saveCustomItem(item, editingCustomIndex)
     applyChangeResult(result)
     if (result.accepted) {
       closeCustomForm()
@@ -784,7 +685,7 @@ export function CreateRequestPage({
 
   const handleDeleteCustomItem = (index: number) => {
     const item = customItems[index]
-    const result = applyCustomItemDelete(requestData, index)
+    const result = deleteCustomItem(index)
     applyChangeResult(result)
     if (result.accepted && item) {
       pendingPhotos.removePhoto(toStableCustomProductId(item.id))
@@ -795,13 +696,10 @@ export function CreateRequestPage({
   const handleApplyHandwritingSelections = (
     selections: readonly HandwritingImportSelection[],
   ) => {
-    const result = applyHandwritingImportSelections(
-      requestData,
-      selections,
-      budgetContext,
+    const result = applyDraftChange((current) =>
+      applyHandwritingImportSelections(current, selections, budgetContext),
     )
     if (result.accepted) {
-      applyRequestData(result.value)
       setLimitMessage('')
     } else {
       setLimitMessage(
@@ -813,19 +711,6 @@ export function CreateRequestPage({
     return result
   }
 
-  const createPhotoSnapshot = (
-    photos: readonly { itemKey: string; token: string }[],
-  ) =>
-    photos.length === 0
-      ? currentRequestSnapshot
-      : `${currentRequestSnapshot}\nphotos:${JSON.stringify(
-          photos
-            .map(({ itemKey, token }) => ({ itemKey, token }))
-            .sort((left, right) =>
-              left.itemKey.localeCompare(right.itemKey),
-            ),
-        )}`
-
   const prepareRequestShare = (withoutPhotos = false) => {
     const validation = validateDraftLimits(requestData, budgetContext, true)
     if (!validation.valid) {
@@ -835,7 +720,7 @@ export function CreateRequestPage({
     }
 
     const photos = withoutPhotos ? [] : activePhotos
-    const snapshot = createPhotoSnapshot(photos)
+    const snapshot = createRequestShareSnapshot(currentRequestSnapshot, photos)
 
     const reusableSharedUrl = sharedUrl.includes('#/l/')
       ? buildLineDeliveryRequestUrl(sharedUrl)
@@ -944,39 +829,19 @@ export function CreateRequestPage({
       return undefined
     }
     const photos = withoutPhotos ? [] : activePhotos
-    const snapshot = createPhotoSnapshot(photos)
+    const snapshot = createRequestShareSnapshot(currentRequestSnapshot, photos)
     return {
       photos,
-      snapshot,
-      reused:
-        sharedUrl.includes('#/r/') &&
-        sharedSnapshot === snapshot &&
-        liveManagementUrl.includes('#/manage/') &&
-        liveManagementSnapshot === snapshot &&
-        typeof liveRequestExpiresAt === 'number' &&
-        Date.now() < liveRequestExpiresAt,
-      url: sharedUrl,
+      ...resolveLiveRequestShare({
+        snapshot,
+        sharedUrl,
+        sharedSnapshot,
+        hasManagementUrl: liveManagementUrl.includes('#/manage/'),
+        managementSnapshot: liveManagementSnapshot,
+        expiresAt: liveRequestExpiresAt,
+        now: Date.now(),
+      }),
     }
-  }
-
-  const liveRequestFailureMessage = (error: unknown): string => {
-    if (error instanceof LiveRequestApiError) {
-      switch (error.code) {
-        case 'auth-failed':
-          return '認証確認に失敗しました。通常依頼は引き続き利用できます。'
-        case 'limit-reached':
-          return '更新可能な依頼の利用上限に達した可能性があります。通常依頼を利用してください。'
-        case 'timeout':
-        case 'service-unavailable':
-        case 'invalid-response':
-          return '更新可能な依頼を作成できませんでした。通常依頼は引き続き利用できます。'
-        case 'conflict':
-        case 'expired':
-        case 'invalid-request':
-          return '更新可能な依頼の内容を準備できませんでした。入力を確認してください。'
-      }
-    }
-    return '更新可能な依頼を作成できませんでした。通常依頼は引き続き利用できます。'
   }
 
   const handleLiveRequestShare = async (withoutPhotos = false) => {
@@ -1027,7 +892,7 @@ export function CreateRequestPage({
         setLastSharedUrl(purchaserUrl)
         saveLastSharedUrl(manualValidationSessionToken ? '' : purchaserUrl)
       } catch (error) {
-        setShareMessage(liveRequestFailureMessage(error))
+        setShareMessage(getLiveRequestFailureMessage(error))
         setShareStatus('error')
         return
       }
@@ -1139,9 +1004,7 @@ export function CreateRequestPage({
   }
 
   const resetRequest = (nextDraft: CreateDraftState) => {
-    setDraft(nextDraft)
-    saveCreateDraft(nextDraft)
-    clearCreateRequestReturnState()
+    resetDraft(nextDraft)
     setExpandedProductIds(new Set())
     setMode('edit')
     setSharedUrl('')
@@ -1151,7 +1014,6 @@ export function CreateRequestPage({
     setShareMessage('')
     setShareStatus('')
     setLimitMessage('')
-    setCustomItems([])
     setRequestKey(createRequestKey())
     pendingPhotos.clearPhotos()
     setPhotoUploadFailed(false)
@@ -1388,7 +1250,8 @@ export function CreateRequestPage({
       managementUrl={
         sharingMode === 'live' &&
         sharedUrl.includes('#/r/') &&
-        liveManagementSnapshot === createPhotoSnapshot(activePhotos)
+        liveManagementSnapshot ===
+          createRequestShareSnapshot(currentRequestSnapshot, activePhotos)
           ? liveManagementUrl
           : undefined
       }
