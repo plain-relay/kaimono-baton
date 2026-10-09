@@ -55,6 +55,7 @@ import {
 } from '../utils/requestShareMessage'
 import {
   createRequestShareLock,
+  createRequestShareSnapshot,
   isRequestUrlWithinShareLimit,
 } from '../utils/shareRequest'
 import { shareText } from '../utils/shareText'
@@ -112,7 +113,6 @@ import {
 } from '../components/RequestSharingModeSection'
 import {
   LIVE_REQUEST_CREATE_TURNSTILE_ACTION,
-  LiveRequestApiError,
   WorkerLiveRequestApi,
 } from '../features/liveRequests/api'
 import {
@@ -123,6 +123,10 @@ import {
   buildLiveRequestItems,
   buildLiveRequestUrls,
 } from '../features/liveRequests/createItems'
+import {
+  getLiveRequestFailureMessage,
+  resolveLiveRequestShare,
+} from '../features/liveRequests/sharePreparation'
 import type { LiveRequestApi } from '../features/liveRequests/types'
 import { addManualValidationSessionToBaseUrl } from '../features/manualValidation/session'
 
@@ -707,19 +711,6 @@ export function CreateRequestPage({
     return result
   }
 
-  const createPhotoSnapshot = (
-    photos: readonly { itemKey: string; token: string }[],
-  ) =>
-    photos.length === 0
-      ? currentRequestSnapshot
-      : `${currentRequestSnapshot}\nphotos:${JSON.stringify(
-          photos
-            .map(({ itemKey, token }) => ({ itemKey, token }))
-            .sort((left, right) =>
-              left.itemKey.localeCompare(right.itemKey),
-            ),
-        )}`
-
   const prepareRequestShare = (withoutPhotos = false) => {
     const validation = validateDraftLimits(requestData, budgetContext, true)
     if (!validation.valid) {
@@ -729,7 +720,7 @@ export function CreateRequestPage({
     }
 
     const photos = withoutPhotos ? [] : activePhotos
-    const snapshot = createPhotoSnapshot(photos)
+    const snapshot = createRequestShareSnapshot(currentRequestSnapshot, photos)
 
     const reusableSharedUrl = sharedUrl.includes('#/l/')
       ? buildLineDeliveryRequestUrl(sharedUrl)
@@ -838,39 +829,19 @@ export function CreateRequestPage({
       return undefined
     }
     const photos = withoutPhotos ? [] : activePhotos
-    const snapshot = createPhotoSnapshot(photos)
+    const snapshot = createRequestShareSnapshot(currentRequestSnapshot, photos)
     return {
       photos,
-      snapshot,
-      reused:
-        sharedUrl.includes('#/r/') &&
-        sharedSnapshot === snapshot &&
-        liveManagementUrl.includes('#/manage/') &&
-        liveManagementSnapshot === snapshot &&
-        typeof liveRequestExpiresAt === 'number' &&
-        Date.now() < liveRequestExpiresAt,
-      url: sharedUrl,
+      ...resolveLiveRequestShare({
+        snapshot,
+        sharedUrl,
+        sharedSnapshot,
+        hasManagementUrl: liveManagementUrl.includes('#/manage/'),
+        managementSnapshot: liveManagementSnapshot,
+        expiresAt: liveRequestExpiresAt,
+        now: Date.now(),
+      }),
     }
-  }
-
-  const liveRequestFailureMessage = (error: unknown): string => {
-    if (error instanceof LiveRequestApiError) {
-      switch (error.code) {
-        case 'auth-failed':
-          return '認証確認に失敗しました。通常依頼は引き続き利用できます。'
-        case 'limit-reached':
-          return '更新可能な依頼の利用上限に達した可能性があります。通常依頼を利用してください。'
-        case 'timeout':
-        case 'service-unavailable':
-        case 'invalid-response':
-          return '更新可能な依頼を作成できませんでした。通常依頼は引き続き利用できます。'
-        case 'conflict':
-        case 'expired':
-        case 'invalid-request':
-          return '更新可能な依頼の内容を準備できませんでした。入力を確認してください。'
-      }
-    }
-    return '更新可能な依頼を作成できませんでした。通常依頼は引き続き利用できます。'
   }
 
   const handleLiveRequestShare = async (withoutPhotos = false) => {
@@ -921,7 +892,7 @@ export function CreateRequestPage({
         setLastSharedUrl(purchaserUrl)
         saveLastSharedUrl(manualValidationSessionToken ? '' : purchaserUrl)
       } catch (error) {
-        setShareMessage(liveRequestFailureMessage(error))
+        setShareMessage(getLiveRequestFailureMessage(error))
         setShareStatus('error')
         return
       }
@@ -1279,7 +1250,8 @@ export function CreateRequestPage({
       managementUrl={
         sharingMode === 'live' &&
         sharedUrl.includes('#/r/') &&
-        liveManagementSnapshot === createPhotoSnapshot(activePhotos)
+        liveManagementSnapshot ===
+          createRequestShareSnapshot(currentRequestSnapshot, activePhotos)
           ? liveManagementUrl
           : undefined
       }
