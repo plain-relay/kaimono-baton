@@ -83,6 +83,25 @@ export function AboutPage({
           今回の外部価値検証では、商品名・条件・共有URLなどの買い物内容を、アクセス解析などで自動収集しません。
         </p>
       </section>
+
+      <section className="info-card about-card" aria-labelledby="privacy-policy-heading">
+        <h2 id="privacy-policy-heading">プライバシーポリシー</h2>
+        <p>
+          不正利用を防ぐため、更新可能な依頼などのサーバー機能ではCloudflare Turnstileを使用します。
+          Cloudflareは、この確認のためにIPアドレスやブラウザ情報などを処理します。
+        </p>
+        <p>
+          データの取り扱いについては、
+          <a href="https://www.cloudflare.com/turnstile-privacy-policy/" rel="noreferrer">
+            Cloudflare Turnstileのプライバシー補足条項
+          </a>
+          と
+          <a href="https://www.cloudflare.com/privacypolicy/" rel="noreferrer">
+            Cloudflareのプライバシーポリシー
+          </a>
+          をご確認ください。
+        </p>
+      </section>
     </main>
   )
 }

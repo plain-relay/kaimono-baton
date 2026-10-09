@@ -85,12 +85,18 @@ npx wrangler secret list --config worker/wrangler.toml
 
 Cloudflare Dashboardで既存Widgetを再利用できるか確認します。新規Widgetが必要な場合は、運用者が明示的に作成します。
 
-- Widget mode: Managed
+- Widget mode: Invisible（利用者のチェック操作なしでバックグラウンド確認）
 - 許可hostname: `plain-relay.github.io`
 - Site Key: 公開値としてフロントへ設定
 - Secret Key: Worker Secretへ設定
 
 フロントは明示レンダリングと`execution: "execute"`を使い、用途ごとに`handwriting_import`、`product_photo_upload`、`shared_request_create`、`shared_request_update`を固定します。WorkerはSiteverifyの`success`、要求されたaction、Origin由来hostnameを照合します。トークンは毎リクエスト新規取得し、成功、失敗、キャンセル後にWidgetをリセットします。
+
+Widget modeはCloudflare側の設定です。フロントの`appearance: "interaction-only"`は表示タイミングの設定であり、ManagedからInvisibleへ切り替えるものではありません。CSSでWidgetを隠したり、フロントに未対応の`mode`パラメータを追加したりしません。InvisibleでもSiteverify、action、hostnameの検証は必須で、通信待ちや確認失敗は残ります。
+
+Invisibleを有効にする前に、「このアプリについて」のプライバシーポリシーへTurnstileの利用と[Cloudflare Turnstile Privacy Addendum](https://www.cloudflare.com/turnstile-privacy-policy/)へのリンクを公開します。既存WidgetのSettingsでmodeだけをInvisibleに変更し、hostname、Site Key、Secret Key、pre-clearance設定を維持します。新しいキーやWorker deployは不要です。
+
+変更後は人工の更新可能な依頼で、作成・追加・数量変更・条件変更・取消がチェック操作なしで完了し、購入画面へ反映されることを確認します。失敗時は同じWidgetのmodeをManagedへ戻します。通常の固定依頼と購入進捗はTurnstileに依存しません。
 
 ## Worker設定
 
