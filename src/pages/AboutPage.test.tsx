@@ -154,6 +154,35 @@ describe('home and about pages', () => {
     expect(container.textContent).toContain('提供対象外です。')
   })
 
+  it.each([false, true])(
+    'makes the Turnstile privacy notice accessible with live requests enabled=%s',
+    (liveRequestsEnabled) => {
+      act(() =>
+        root.render(
+          <AboutPage
+            onBackHome={() => undefined}
+            liveRequestsEnabled={liveRequestsEnabled}
+          />,
+        ),
+      )
+
+      const privacyPolicy = container.querySelector(
+        'section[aria-labelledby="privacy-policy-heading"]',
+      )
+      expect(privacyPolicy?.querySelector('h2')?.textContent).toBe(
+        'プライバシーポリシー',
+      )
+      expect(privacyPolicy?.textContent).toContain('Cloudflare Turnstileを使用します')
+      expect(privacyPolicy?.textContent).toContain('IPアドレスやブラウザ情報')
+      const links = [...(privacyPolicy?.querySelectorAll('a') ?? [])]
+      expect(links.map((link) => link.getAttribute('href'))).toEqual([
+        'https://www.cloudflare.com/turnstile-privacy-policy/',
+        'https://www.cloudflare.com/privacypolicy/',
+      ])
+      expect(links.every((link) => link.relList.contains('noreferrer'))).toBe(true)
+    },
+  )
+
   it('shows a subdued recovery-link reminder only for unbacked catalog changes', () => {
     const changed = updateBaseProduct(
       createEmptyHouseholdCatalog('2026-07-26T00:00:00.000Z'),
