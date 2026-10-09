@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { products } from '../data/products'
 import type {
   LiveRequestApi,
+  LiveRequestCreateResponse,
   LiveRequestNewItem,
   LiveRequestSnapshot,
 } from '../features/liveRequests/types'
@@ -259,6 +260,88 @@ describe('CreateRequestPage live request sharing', () => {
     await click(button('更新可能な依頼をLINEで送る'))
 
     expect(api.create).toHaveBeenCalledTimes(2)
+  })
+
+  it('reuses the same live request after cancelling native sharing', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(
+      Date.parse('2026-08-01T00:00:00.000Z'),
+    )
+    share.mockRejectedValueOnce(new DOMException('cancelled', 'AbortError'))
+    await renderPage()
+    await click(container.querySelector('input[value="live"]')!)
+    await selectMilk()
+    await click(button('確認へ'))
+    await click(button('更新可能な依頼をLINEで送る'))
+
+    expect(share).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('共有をキャンセルしました')
+    expect(container.querySelector('textarea[aria-label="依頼者用の管理リンク"]'))
+      .not.toBeNull()
+
+    await click(button('更新可能な依頼をLINEで送る'))
+    expect(api.create).toHaveBeenCalledTimes(1)
+    expect(share).toHaveBeenCalledTimes(2)
+    expect(share.mock.calls[1][0]).toEqual(share.mock.calls[0][0])
+    expect(share.mock.calls[1][0].text).not.toContain(editSecret)
+  })
+
+  it('blocks duplicate creation while the first request is pending', async () => {
+    let resolveCreate!: (result: LiveRequestCreateResponse) => void
+    vi.mocked(api.create).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveCreate = resolve }),
+    )
+    await renderPage()
+    await click(container.querySelector('input[value="live"]')!)
+    await selectMilk()
+    await click(button('確認へ'))
+    const send = button('更新可能な依頼をLINEで送る')
+    await click(send)
+    await click(send)
+    expect(api.create).toHaveBeenCalledTimes(1)
+    expect(share).not.toHaveBeenCalled()
+    expect(send.disabled).toBe(true)
+
+    await act(async () => {
+      resolveCreate({ requestToken, editSecret, request: createdSnapshot() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(share).toHaveBeenCalledTimes(1)
+    expect(button('更新可能な依頼をLINEで送る').disabled).toBe(false)
+    expect(sharedUrl()).toContain('#/r/')
+    expect(sharedUrl()).not.toContain(editSecret)
+  })
+
+  it('preserves input and releases the lock after failed creation for an explicit fixed share', async () => {
+    vi.mocked(api.create).mockRejectedValueOnce(
+      new Error('synthetic-provider-detail'),
+    )
+    await renderPage()
+    await click(container.querySelector('input[value="live"]')!)
+    await selectMilk()
+    await click(button('確認へ'))
+    await click(button('更新可能な依頼をLINEで送る'))
+    expect(share).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('通常依頼は引き続き利用できます')
+    expect(container.textContent).not.toContain('synthetic-provider-detail')
+    expect(container.querySelector('textarea[aria-label="依頼者用の管理リンク"]'))
+      .toBeNull()
+
+    await click(button('修正する'))
+    await click(container.querySelector('input[value="fixed"]')!)
+    await click(button('確認へ'))
+    await click(button('LINEで送る'))
+    expect(api.create).toHaveBeenCalledTimes(1)
+    expect(share).toHaveBeenCalledTimes(1)
+    const url = sharedUrl()
+    expect(url).toContain('#/l/')
+    const payload = decodeShoppingSessionPayload({
+      encodedPayload: new URL(url).hash.slice('#/l/'.length),
+      codec: 'compact-path',
+    })
+    expect(payload.items).toEqual([
+      expect.objectContaining({ productId: milk.id, quantity: 1 }),
+    ])
   })
 
   it('keeps fixed mode as the default even when live requests are configured', async () => {
