@@ -1,0 +1,169 @@
+.create-reset-actions {
+  margin-top: 1rem;
+  text-align: right;
+}
+
+.bottom-bar {
+  position: fixed;
+  inset: auto 0 0 0;
+  display: flex;
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 0.75rem 0.85rem calc(0.75rem + env(safe-area-inset-bottom));
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-top: 1px solid #d9e1de;
+  background: rgba(255, 255, 255, 0.97);
+}
+
+.bottom-bar strong {
+  color: #2b453c;
+  font-size: 0.9rem;
+}
+
+.bottom-bar p {
+  margin: 0;
+  color: #5c6b66;
+  font-size: 0.74rem;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+
+.bottom-bar-actions {
+  flex-wrap: nowrap;
+  margin-top: 0;
+}
+
+.review-category {
+  padding-top: 0.75rem;
+  padding-bottom: 0.65rem;
+}
+
+.review-category h2 {
+  margin-bottom: 0.3rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid #e3e9e6;
+  color: #38544a;
+  font-size: 0.92rem;
+}
+
+.review-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-list li {
+  display: flow-root;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #edf1ef;
+  color: #40504b;
+  font-size: 0.9rem;
+}
+
+.review-list li:last-child {
+  border-bottom: 0;
+}
+
+.review-list strong {
+  color: #273b34;
+}
+
+.review-memo {
+  margin: 0.1rem 0 0;
+  color: #7a8884;
+  font-size: 0.78rem;
+}
+
+.review-photo-thumbnail {
+  float: left;
+  width: 4.5rem;
+  height: 4.5rem;
+  margin: 0 0.65rem 0.35rem 0;
+  border: 1px solid #d7e1dd;
+  border-radius: 8px;
+  background: #fff;
+  object-fit: cover;
+}
+
+.review-share-actions {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+
+.review-share-button,
+.review-share-actions > .secondary-button {
+  width: 100%;
+}
+
+.review-share-button {
+  min-height: 52px;
+}
+
+.review-share-actions .helper-text,
+.review-share-actions .copy-message {
+  margin: 0;
+}
+
+.review-share-actions .helper-text {
+  text-align: center;
+}
+
+.review-copy-fallback {
+  display: grid;
+  gap: 0.15rem;
+  justify-items: center;
+  margin-top: 0.15rem;
+}
+
+.review-copy-fallback .helper-text {
+  font-size: 0.78rem;
+}
+
+.review-copy-button {
+  min-height: 44px;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.copy-message {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.copy-message.success {
+  border: 1px solid #cce1d8;
+  background: #eef7f2;
+  color: #356453;
+}
+
+.copy-message.cancelled {
+  border: 1px solid #dfe5e2;
+  background: #f8faf9;
+  color: #53635d;
+}
+
+.copy-message.error {
+  border: 1px solid #ead2cf;
+  background: #fff7f6;
+  color: #a04743;
+}
+
+.info-card textarea {
+  color: #5d6a66;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,134 @@
+@media (max-width: 360px) {
+  .product-home-hero,
+  .product-home-guide {
+    padding: 0.9rem;
+  }
+
+  .product-home-copy {
+    font-size: 1.35rem;
+  }
+
+  .product-home-actions .primary-button {
+    padding-right: 0.55rem;
+    padding-left: 0.55rem;
+    font-size: 0.92rem;
+  }
+
+  .page-with-bottom-bar {
+    padding-bottom: 11rem;
+  }
+
+  .bottom-bar {
+    display: grid;
+    align-items: stretch;
+  }
+
+  .bottom-bar-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bottom-bar-actions button {
+    width: 100%;
+  }
+
+  .catalog-product-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .catalog-product-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .catalog-product-actions button {
+    width: 100%;
+  }
+
+  .catalog-backup-actions,
+  .catalog-recovery-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .handwriting-source-actions,
+  .handwriting-image-metadata,
+  .handwriting-preview-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .handwriting-source-actions,
+  .handwriting-preview-actions {
+    display: grid;
+  }
+
+  .handwriting-preview-actions button {
+    width: 100%;
+  }
+
+  .handwriting-diagnostics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .handwriting-diagnostics-actions {
+    display: grid;
+  }
+
+  .product-photo-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .live-request-sync-card .inline-actions,
+  .live-request-mode-options {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .live-request-sync-card .inline-actions button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .dialog-actions {
+    display: grid;
+  }
+
+  .dialog-actions button {
+    width: 100%;
+  }
+
+  .product-row-main {
+    grid-template-columns: minmax(0, 1fr) max-content 2.75rem;
+  }
+
+  .product-row-main .product-icon {
+    display: none;
+  }
+}
+
+@media (min-width: 700px) {
+  .product-home-hero,
+  .product-home-guide {
+    padding: 1.4rem;
+  }
+
+  .product-home-actions {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  }
+
+  .product-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shopping-dialog-backdrop {
+    place-items: center;
+  }
+
+  .shopping-dialog {
+    border-radius: 14px;
+  }
+}
