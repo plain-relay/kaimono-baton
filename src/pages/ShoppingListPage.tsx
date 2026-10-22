@@ -16,11 +16,26 @@ import { ShoppingItemCard } from '../components/ShoppingItemCard'
 import { ShoppingToolbar } from '../components/ShoppingToolbar'
 import { ShoppingUndoNotice } from '../components/ShoppingUndoNotice'
 import { FIXED_REQUEST_TITLE } from '../constants/request'
+import { LiveRequestChangeReview } from '../features/liveRequests/LiveRequestChangeReview'
 import {
-  useConsultationWorkflow,
-  type ConsultationShareLock,
+  cancelledItemMessage,
+  describeLiveRequestChange,
+  liveRequestToShoppingPayload,
+} from '../features/liveRequests/shopping'
+import type { LiveRequestApi } from '../features/liveRequests/types'
+import { useLiveRequestSync } from '../features/liveRequests/useLiveRequestSync'
+import {
+  getProductPhotoConfig,
+  type ProductPhotoConfig,
+} from '../features/productPhotos/config'
+import { ProductPhotoViewer } from '../features/productPhotos/ProductPhotoViewer'
+import { confirmationSnapshot, useCartConfirmation } from '../hooks/useCartConfirmation'
+import {
+  useConsultationWorkflow
 } from '../hooks/useConsultationWorkflow'
 import { usePersistedShoppingSession } from '../hooks/usePersistedShoppingSession'
+import { useShoppingCheckout } from '../hooks/useShoppingCheckout'
+import { useShoppingResultSharing, type ShareNotice } from '../hooks/useShoppingResultSharing'
 import { useShoppingUndoNotice } from '../hooks/useShoppingUndoNotice'
 import type {
   CheckedItemStatus,
@@ -31,6 +46,10 @@ import type {
 } from '../types/shopping'
 import { addLineExternalBrowserHint } from '../utils/lineDeliveryUrl'
 import {
+  isNativeShareAvailable,
+  shareText
+} from '../utils/shareText'
+import {
   buildShoppingResultMessage,
 } from '../utils/shoppingMessages'
 import {
@@ -38,34 +57,14 @@ import {
   type ShoppingFilterMode,
 } from '../utils/shoppingPageView'
 import {
-  getItemStatus,
-  hasCondition,
-} from '../utils/shoppingState'
-import { getShoppingCheckoutDecision } from '../utils/shoppingCheckout'
-import {
   loadShoppingSession,
   reconcileShoppingSession,
   restoreShoppingSession,
   type RequestRouteCodec,
 } from '../utils/shoppingSession'
 import {
-  isNativeShareAvailable,
-  shareText,
-  type NativeShareResult,
-} from '../utils/shareText'
-import {
-  getProductPhotoConfig,
-  type ProductPhotoConfig,
-} from '../features/productPhotos/config'
-import { ProductPhotoViewer } from '../features/productPhotos/ProductPhotoViewer'
-import type { LiveRequestApi } from '../features/liveRequests/types'
-import { useLiveRequestSync } from '../features/liveRequests/useLiveRequestSync'
-import { LiveRequestChangeReview } from '../features/liveRequests/LiveRequestChangeReview'
-import {
-  cancelledItemMessage,
-  describeLiveRequestChange,
-  liveRequestToShoppingPayload,
-} from '../features/liveRequests/shopping'
+  getItemStatus
+} from '../utils/shoppingState'
 
 type ShoppingListPageProps = {
   encodedPayload: string
@@ -75,26 +74,6 @@ type ShoppingListPageProps = {
   productPhotoConfig?: ProductPhotoConfig
   liveRequestToken?: string
   liveRequestApi?: LiveRequestApi
-}
-
-type CartConfirmationState = {
-  itemId: string
-  needsQuantityConfirmation: boolean
-  needsConditionConfirmation: boolean
-  quantityConfirmed: boolean
-  conditionConfirmed: boolean
-  isConditionFollowUp: boolean
-  itemSnapshot: string
-  isLiveChangeReview: boolean
-}
-
-function confirmationSnapshot(item: ShoppingRequestItemPayload): string {
-  return JSON.stringify([item.id, item.quantity, item.memo ?? '', item.liveLifecycle, item.liveUpdatedRevision])
-}
-
-type ShareNotice = {
-  kind: 'success' | 'error' | 'info'
-  message: string
 }
 
 function getUndoNoticeMessage(
@@ -111,38 +90,6 @@ function getUndoNoticeMessage(
     return `${item.productNameSnapshot}を今回は買わないにしました`
   }
   return `${item.productNameSnapshot}を未購入に戻しました`
-}
-
-function getResultShareNotice(result: NativeShareResult): ShareNotice {
-  if (result === 'shared') {
-    return {
-      kind: 'success',
-      message:
-        '共有画面を開きました。\nLINEを選択して結果を送信してください。',
-    }
-  }
-
-  if (result === 'copied') {
-    return {
-      kind: 'success',
-      message:
-        'OS共有を利用できなかったため、結果をコピーしました。\nLINEへ貼り付けるか、外部ブラウザで開いて共有してください。',
-    }
-  }
-
-  if (result === 'cancelled') {
-    return {
-      kind: 'info',
-      message:
-        '結果の共有をキャンセルしました。買い物結果はそのまま残っています。',
-    }
-  }
-
-  return {
-    kind: 'error',
-    message:
-      '結果を共有またはコピーできませんでした。\n買い物結果はそのまま残っています。外部ブラウザで開いてもう一度お試しください。',
-  }
 }
 
 export function ShoppingListPage({
@@ -168,13 +115,6 @@ export function ShoppingListPage({
     getCurrentConsultations,
   } = usePersistedShoppingSession()
   const [filterMode, setFilterMode] = useState<ShoppingFilterMode>('all')
-  const [cartConfirmation, setCartConfirmation] =
-    useState<CartConfirmationState | null>(null)
-  const [isCheckoutReviewOpen, setIsCheckoutReviewOpen] = useState(false)
-  const [isCompletionView, setIsCompletionView] = useState(false)
-  const [isCheckingCheckout, setIsCheckingCheckout] = useState(false)
-  const [showOfflineFinishChoice, setShowOfflineFinishChoice] = useState(false)
-  const checkoutCheckRef = useRef(false)
   const liveUndoContextRef = useRef<{
     change: ShoppingStateChange
     itemSnapshot: string
@@ -186,50 +126,35 @@ export function ShoppingListPage({
     consumeUndoNotice,
     clearUndoNotice,
   } = useShoppingUndoNotice()
-  const [isSharingResult, setIsSharingResult] = useState(false)
   const [shareNotice, setShareNotice] = useState<ShareNotice | null>(null)
-  const activeShareRef = useRef(false)
-  const resultShareGenerationRef = useRef(0)
-  const shouldPublishResultNoticeRef = useRef(false)
-  const checkoutReviewRef = useRef<HTMLElement | null>(null)
-  const completionHeadingRef = useRef<HTMLHeadingElement | null>(null)
+  const {isSharingResult, shareResult, consultationShareLock, resetResultSharing, cancelResultShareNotice} = useShoppingResultSharing(setShareNotice)
   const loadedLiveRequestIdRef = useRef<string>()
   const liveSync = useLiveRequestSync({
     enabled: Boolean(liveRequestToken && liveRequestApi),
     requestToken: liveRequestToken ?? '',
     api: liveRequestApi,
   })
+  const {
+    cartConfirmation, setCartConfirmation, handleOpenCartConfirmation, handleConfirmCart,
+  } = useCartConfirmation({
+    payload, liveRequestToken, liveSync, getCurrentShoppingState,
+    commitShoppingChange: (...args) => commitShoppingChange(...args),
+    closeConsultation: () => closeConsultation(), setShareNotice,
+  })
+  const {
+    isCheckoutReviewOpen, setIsCheckoutReviewOpen, isCompletionView, setIsCompletionView,
+    isCheckingCheckout, showOfflineFinishChoice, setShowOfflineFinishChoice,
+    checkoutReviewRef, completionHeadingRef, handleOpenCheckoutReview, handleFinishShopping, finishWithCurrentList,
+  } = useShoppingCheckout({
+    requestId: payload?.requestId, getItems: () => sortedItems, liveRequestToken, liveSync,
+    getCurrentShoppingState, getCurrentConsultations, setShareNotice,
+  })
   const nativeShareAvailable = isNativeShareAvailable()
   const externalBrowserUrl = useMemo(
     () => addLineExternalBrowserHint(window.location.href),
     [encodedPayload, liveRequestToken, payloadCodec],
   )
-  const consultationShareLock = useMemo<ConsultationShareLock>(
-    () => ({
-      tryAcquire: () => {
-        if (activeShareRef.current) {
-          return false
-        }
-        activeShareRef.current = true
-        return true
-      },
-      release: () => {
-        activeShareRef.current = false
-      },
-    }),
-    [],
-  )
-
   const { checkedState, itemIssues, cartOrder } = shoppingState
-
-  useEffect(
-    () => () => {
-      resultShareGenerationRef.current += 1
-      shouldPublishResultNoticeRef.current = false
-      activeShareRef.current = false
-    },
-    [],
-  )
 
   const activeItems = useMemo(
     () =>
@@ -322,9 +247,7 @@ export function ShoppingListPage({
       return
     }
     loadedLiveRequestIdRef.current = undefined
-    resultShareGenerationRef.current += 1
-    shouldPublishResultNoticeRef.current = false
-    activeShareRef.current = false
+    resetResultSharing()
     clearUndoNotice()
 
     try {
@@ -343,7 +266,7 @@ export function ShoppingListPage({
       setCartConfirmation(null)
       setIsCheckoutReviewOpen(false)
       setIsCompletionView(false)
-      setIsSharingResult(false)
+      resetResultSharing()
       setShareNotice(null)
     } catch (error) {
       const message =
@@ -358,6 +281,7 @@ export function ShoppingListPage({
     onError,
     payloadCodec,
     replaceSession,
+    resetResultSharing,
     liveRequestToken,
   ])
 
@@ -395,12 +319,12 @@ export function ShoppingListPage({
       setFilterMode('all')
       setIsCheckoutReviewOpen(false)
       setIsCompletionView(false)
-      setIsSharingResult(false)
+      resetResultSharing()
       setShareNotice(null)
       setShowOfflineFinishChoice(false)
       clearUndoNotice()
     } else if (liveSync.pendingChanges.length > 0) {
-      shouldPublishResultNoticeRef.current = false
+      cancelResultShareNotice()
       setIsCompletionView(false)
     }
   }, [
@@ -408,24 +332,14 @@ export function ShoppingListPage({
     getCurrentConsultations,
     getCurrentShoppingState,
     liveRequestToken,
+    resetResultSharing,
+    cancelResultShareNotice,
     liveSync.pendingChanges.length,
     liveSync.snapshot,
     liveSync.status,
     onError,
     replaceSession,
   ])
-
-  useEffect(() => {
-    if (!liveRequestToken || !liveSync.snapshot || !cartConfirmation) return
-    const item = liveRequestToShoppingPayload(liveSync.snapshot).items.find(
-      (candidate) => candidate.id === cartConfirmation.itemId,
-    )
-    if (!item || item.liveLifecycle === 'cancelled-by-requester' ||
-        confirmationSnapshot(item) !== cartConfirmation.itemSnapshot) {
-      setCartConfirmation(null)
-      setShareNotice({kind: 'info', message: '確認中の商品が変更・取消されました。最新の内容を確認してください。'})
-    }
-  }, [cartConfirmation, liveRequestToken, liveSync.snapshot])
 
   const commitShoppingChange = (
     itemId: string,
@@ -470,72 +384,6 @@ export function ShoppingListPage({
     return true
   }
 
-  const handleOpenCartConfirmation = (
-    item: ShoppingRequestItemPayload,
-    isConditionFollowUp = false,
-  ) => {
-    const isLiveChangeReview = Boolean(liveRequestToken) &&
-      liveSync.getCurrentState().pendingChanges.some((change) =>
-        change.itemId === item.id,
-      ) && (getItemStatus(getCurrentShoppingState().checkedState, item.id) === 'inCart' ||
-        getItemStatus(getCurrentShoppingState().checkedState, item.id) === 'verified')
-    const needsQuantityConfirmation =
-      isLiveChangeReview || (!isConditionFollowUp && item.quantity >= 2)
-    const needsConditionConfirmation = hasCondition(item)
-
-    if (!needsQuantityConfirmation && !needsConditionConfirmation) {
-      commitShoppingChange(item.id, 'inCart')
-      liveSync.acknowledgeChanges(item.id, item.liveUpdatedRevision)
-      return
-    }
-
-    closeConsultation()
-    setShareNotice(null)
-    setCartConfirmation({
-      itemId: item.id,
-      needsQuantityConfirmation,
-      needsConditionConfirmation,
-      quantityConfirmed: false,
-      conditionConfirmed: false,
-      isConditionFollowUp,
-      itemSnapshot: confirmationSnapshot(item),
-      isLiveChangeReview,
-    })
-  }
-
-  const handleConfirmCart = () => {
-    if (!cartConfirmation) {
-      return
-    }
-    if (liveRequestToken) {
-      const snapshot = liveSync.getCurrentState().snapshot
-      const item = snapshot ? liveRequestToShoppingPayload(snapshot).items.find(
-        (candidate) => candidate.id === cartConfirmation.itemId,
-      ) : undefined
-      if (!item || item.liveLifecycle === 'cancelled-by-requester' ||
-          confirmationSnapshot(item) !== cartConfirmation.itemSnapshot) {
-        setCartConfirmation(null)
-        return
-      }
-    }
-    if (
-      (cartConfirmation.needsQuantityConfirmation &&
-        !cartConfirmation.quantityConfirmed) ||
-      (cartConfirmation.needsConditionConfirmation &&
-        !cartConfirmation.conditionConfirmed)
-    ) {
-      return
-    }
-
-    commitShoppingChange(
-      cartConfirmation.itemId,
-      cartConfirmation.needsConditionConfirmation ? 'verified' : 'inCart',
-    )
-    const item = payload?.items.find((candidate) => candidate.id === cartConfirmation.itemId)
-    liveSync.acknowledgeChanges(cartConfirmation.itemId, item?.liveUpdatedRevision)
-    setCartConfirmation(null)
-  }
-
   const handleOpenConsultation = (itemId: string) => {
     setCartConfirmation(null)
     setShareNotice(null)
@@ -556,28 +404,6 @@ export function ShoppingListPage({
     const item = payload?.items.find((candidate) => candidate.id === draftIssue.itemId)
     liveSync.acknowledgeChanges(draftIssue.itemId, item?.liveUpdatedRevision)
     closeConsultation()
-  }
-
-  const handleOpenCheckoutReview = async () => {
-    setIsCheckoutReviewOpen(true)
-    window.requestAnimationFrame(() => {
-      checkoutReviewRef.current?.focus()
-      checkoutReviewRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-    })
-    if (liveRequestToken && !checkoutCheckRef.current) {
-      checkoutCheckRef.current = true
-      setIsCheckingCheckout(true)
-      setShowOfflineFinishChoice(false)
-      try {
-        await liveSync.refresh()
-      } finally {
-        checkoutCheckRef.current = false
-        setIsCheckingCheckout(false)
-      }
-    }
   }
 
   const handleUndo = () => {
@@ -610,103 +436,10 @@ export function ShoppingListPage({
     )
   }
 
-  const handleShareResult = async () => {
-    if (activeShareRef.current) {
-      return
-    }
-
-    const shareGeneration = resultShareGenerationRef.current
-    activeShareRef.current = true
-    shouldPublishResultNoticeRef.current = true
-    setIsSharingResult(true)
-    try {
-      const result = await shareText({
-        title: 'おつかい結果',
-        text: buildShoppingResultMessage(
-          completionState.purchasedCount,
-          notBuyingItems.map((item) => ({
-            item,
-            issue: itemIssues[item.id],
-          })),
-        ),
-      })
-      if (
-        shareGeneration !== resultShareGenerationRef.current ||
-        !shouldPublishResultNoticeRef.current
-      ) {
-        return
-      }
-
-      setShareNotice(getResultShareNotice(result))
-    } finally {
-      if (shareGeneration === resultShareGenerationRef.current) {
-        shouldPublishResultNoticeRef.current = false
-        activeShareRef.current = false
-        setIsSharingResult(false)
-      }
-    }
-  }
-
-  const finishWithCurrentList = () => {
-    const current = liveSync.getCurrentState()
-    const decision = getShoppingCheckoutDecision({
-      requestId: payload?.requestId,
-      items: sortedItems,
-      checkedState: getCurrentShoppingState().checkedState,
-      consultations: getCurrentConsultations(),
-      live: liveRequestToken ? current : undefined,
-      // Called after a successful freshness check or an explicit offline choice.
-      allowUnconfirmedLive: true,
-    })
-    if (decision.outcome !== 'finish') {
-      return
-    }
-
-    setShareNotice(!decision.latestConfirmed
-      ? { kind: 'info', message: '最新の依頼は未確認です。保存済みのリストで買い物を終了しました。' }
-      : null)
-    setIsCompletionView(true)
-    window.requestAnimationFrame(() => {
-      completionHeadingRef.current?.focus()
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-    })
-  }
-
-  const handleFinishShopping = async () => {
-    if (!liveRequestToken) {
-      finishWithCurrentList()
-      return
-    }
-    if (checkoutCheckRef.current) return
-    const expectedRequestId = payload?.requestId
-    checkoutCheckRef.current = true
-    setIsCheckingCheckout(true)
-    setShowOfflineFinishChoice(false)
-    try {
-      const current = await liveSync.refresh()
-      const decision = getShoppingCheckoutDecision({
-        requestId: expectedRequestId,
-        items: sortedItems,
-        checkedState: getCurrentShoppingState().checkedState,
-        consultations: getCurrentConsultations(),
-        live: current,
-      })
-      if (decision.outcome === 'blocked') {
-        if (decision.reason === 'changes-pending') {
-          setShareNotice({kind: 'info', message: '新しい変更があります。内容を確認してから終了してください。'})
-        }
-        return
-      }
-      if (decision.outcome === 'offline-confirmation-required') {
-        setShowOfflineFinishChoice(true)
-        return
-      }
-      finishWithCurrentList()
-    } finally {
-      checkoutCheckRef.current = false
-      setIsCheckingCheckout(false)
-    }
-  }
+  const handleShareResult = () => shareResult(buildShoppingResultMessage(
+    completionState.purchasedCount,
+    notBuyingItems.map((item) => ({item, issue: itemIssues[item.id]})),
+  ))
 
   const handleReviewLiveChange = (itemId: string) => {
     const current = liveSync.getCurrentState()
@@ -725,7 +458,7 @@ export function ShoppingListPage({
   }
 
   const handleReviewShopping = () => {
-    shouldPublishResultNoticeRef.current = false
+    cancelResultShareNotice()
     setIsCompletionView(false)
     setShareNotice(null)
     void handleOpenCheckoutReview()
