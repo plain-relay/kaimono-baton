@@ -1,42 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { categories } from '../data/categories'
-import { FIXED_REQUEST_TITLE } from '../constants/request'
-import type { CreateDraftState } from '../types/shopping'
-import type { CommitTextResult } from '../components/ImeAwareTextInput'
+import { useMemo, useState } from 'react'
 import { CreateRequestBottomActions } from '../components/CreateRequestBottomActions'
 import { CustomItemsSection } from '../components/CustomItemsSection'
+import { HiddenSelectedProductsSection } from '../components/HiddenSelectedProductsSection'
+import type { CommitTextResult } from '../components/ImeAwareTextInput'
 import { ProductSelectionSections } from '../components/ProductSelectionSections'
 import { RequestLimitNotice } from '../components/RequestLimitNotice'
 import { RequestReviewView } from '../components/RequestReviewView'
-import { HiddenSelectedProductsSection } from '../components/HiddenSelectedProductsSection'
 import {
-  loadLastSharedUrl,
-  saveCreateDraft,
-  saveLastSharedUrl,
-} from '../utils/storage'
-import { createId } from '../utils/id'
-import {
-  createEmptyDraftState,
-  createDraftState,
-  createRequestContentSnapshot,
-  hasAnyCreateRequestInput,
-  resolveSharedRequestUrl,
-  toggleExpandedProductId,
-} from '../utils/createRequestState'
-import {
-  normalizeCustomQuantity,
-  type DraftChangeResult,
-} from '../utils/draftLimits'
-import {
-  calculateRequestBudget,
-  countTotalConditionCharacters,
-  isShareUrlWarning,
-  isTotalConditionWarning,
-  validateDraftLimits,
-  type CustomRequestDraftItem,
-  type DraftLimitReason,
-  type RequestDraftData,
-} from '../utils/requestBudget'
+  RequestSharingModeSection
+} from '../components/RequestSharingModeSection'
+import { FIXED_REQUEST_TITLE } from '../constants/request'
 import {
   MAX_CUSTOM_ITEM_NAME_CHARS,
   MAX_CUSTOM_ITEM_UNIT_CHARS,
@@ -44,91 +17,79 @@ import {
   MAX_ITEM_QUANTITY,
   MAX_SHARE_URL_LENGTH,
 } from '../constants/requestLimits'
-import {
-  splitUserCharacters,
-  truncateUserCharacters,
-} from '../utils/textLength'
-import { createRequestKey } from '../utils/compactRequest'
-import {
-  buildRequestShareMessage,
-  REQUEST_SHARE_TITLE,
-} from '../utils/requestShareMessage'
-import {
-  createRequestShareLock,
-  createRequestShareSnapshot,
-  isRequestUrlWithinShareLimit,
-} from '../utils/shareRequest'
-import { shareText } from '../utils/shareText'
-import { buildLineDeliveryRequestUrl } from '../utils/lineDeliveryUrl'
-import {
-  saveCreateRequestReturnState,
-} from '../utils/createRequestReturnState'
-import {
-  getLimitMessage,
-  getShareResultMessage,
-  type ShareMessageStatus,
-} from '../utils/requestNoticeMessages'
-import { useCustomItemEditor } from '../hooks/useCustomItemEditor'
-import { useCreateRequestDraft } from '../hooks/useCreateRequestDraft'
-import { useHouseholdCatalog } from '../hooks/useHouseholdCatalog'
-import { buildSelectedRequestItems } from '../utils/selectedRequestItems'
-import { toStableCustomProductId } from '../utils/selectedRequestItems'
+import { categories } from '../data/categories'
 import { HandwritingImportSection } from '../features/handwriting/HandwritingImportSection'
+import {
+  applyHandwritingImportSelections,
+} from '../features/handwriting/applyImport'
 import {
   getHandwritingImportConfig,
   type HandwritingImportConfig,
 } from '../features/handwriting/config'
-import {
-  applyHandwritingImportSelections,
-} from '../features/handwriting/applyImport'
+import type {
+  ImagePreprocessOptions,
+} from '../features/handwriting/imagePreprocessing'
 import type {
   HandwritingImportProvider,
   HandwritingImportSelection,
 } from '../features/handwriting/types'
-import type {
-  ImagePreprocessOptions,
-} from '../features/handwriting/imagePreprocessing'
+import {
+  getLiveRequestConfig,
+  type LiveRequestConfig,
+} from '../features/liveRequests/config'
+import type { LiveRequestApi } from '../features/liveRequests/types'
+import { addManualValidationSessionToBaseUrl } from '../features/manualValidation/session'
+import { ProductPhotoAttachment } from '../features/productPhotos/ProductPhotoAttachment'
+import {
+  type ProductPhotoUploadProvider
+} from '../features/productPhotos/ProductPhotoUploadProvider'
 import {
   getProductPhotoConfig,
   type ProductPhotoConfig,
 } from '../features/productPhotos/config'
 import {
-  PRODUCT_PHOTO_TURNSTILE_ACTION,
-  ProductPhotoUploadError,
-  WorkerProductPhotoUploadProvider,
-  type ProductPhotoClientDiagnosticStage,
-  type ProductPhotoUploadProvider,
-} from '../features/productPhotos/ProductPhotoUploadProvider'
-import {
   processProductPhoto as defaultProcessProductPhoto,
   type ProcessedProductPhoto,
 } from '../features/productPhotos/imageProcessing'
 import { usePendingProductPhotos } from '../features/productPhotos/usePendingProductPhotos'
-import { ProductPhotoAttachment } from '../features/productPhotos/ProductPhotoAttachment'
-import { BrowserTurnstileTokenProvider } from '../features/handwriting/turnstile'
-import { buildCompactRequestV4UrlFromInput } from '../utils/compactRequestV4'
+import { useCreateRequestDraft } from '../hooks/useCreateRequestDraft'
+import { useCustomItemEditor } from '../hooks/useCustomItemEditor'
+import { useHouseholdCatalog } from '../hooks/useHouseholdCatalog'
+import { useRequestSharing } from '../hooks/useRequestSharing'
+import type { CreateDraftState } from '../types/shopping'
+import { createRequestKey } from '../utils/compactRequest'
 import {
-  RequestSharingModeSection,
-  type RequestSharingMode,
-} from '../components/RequestSharingModeSection'
+  createDraftState,
+  createEmptyDraftState,
+  createRequestContentSnapshot,
+  hasAnyCreateRequestInput,
+  toggleExpandedProductId
+} from '../utils/createRequestState'
 import {
-  LIVE_REQUEST_CREATE_TURNSTILE_ACTION,
-  WorkerLiveRequestApi,
-} from '../features/liveRequests/api'
+  normalizeCustomQuantity,
+  type DraftChangeResult,
+} from '../utils/draftLimits'
+import { createId } from '../utils/id'
 import {
-  getLiveRequestConfig,
-  type LiveRequestConfig,
-} from '../features/liveRequests/config'
+  calculateRequestBudget,
+  countTotalConditionCharacters,
+  isShareUrlWarning,
+  isTotalConditionWarning,
+  type CustomRequestDraftItem,
+  type DraftLimitReason,
+  type RequestDraftData
+} from '../utils/requestBudget'
 import {
-  buildLiveRequestItems,
-  buildLiveRequestUrls,
-} from '../features/liveRequests/createItems'
+  getLimitMessage
+} from '../utils/requestNoticeMessages'
+import { buildSelectedRequestItems, toStableCustomProductId } from '../utils/selectedRequestItems'
 import {
-  getLiveRequestFailureMessage,
-  resolveLiveRequestShare,
-} from '../features/liveRequests/sharePreparation'
-import type { LiveRequestApi } from '../features/liveRequests/types'
-import { addManualValidationSessionToBaseUrl } from '../features/manualValidation/session'
+  createRequestShareSnapshot
+} from '../utils/shareRequest'
+import {
+  splitUserCharacters,
+  truncateUserCharacters,
+} from '../utils/textLength'
 
 type CreateRequestPageProps = {
   onBackHome: () => void
@@ -149,48 +110,6 @@ type CreateRequestPageProps = {
   liveRequestConfig?: LiveRequestConfig
   liveRequestApi?: LiveRequestApi
   createLiveRequestItemId?: () => string
-}
-
-function productPhotoUploadErrorMessage(
-  error: unknown,
-  clientStage?: ProductPhotoClientDiagnosticStage,
-): string {
-  if (!(error instanceof ProductPhotoUploadError)) {
-    return '写真を保存できませんでした。再試行するか、写真を外して共有してください。'
-  }
-  const message = (() => {
-    switch (error.code) {
-      case 'auth-failed':
-        return '写真保存の認証確認に失敗しました。もう一度お試しください。'
-      case 'validation-session-invalid':
-        return '限定検証セッションを確認できませんでした。検証URLを開き直してください。'
-      case 'validation-session-expired':
-        return '限定検証セッションの有効期限が切れています。'
-      case 'origin-not-allowed':
-        return '写真保存への接続元を確認できませんでした。通常の商品選択は引き続き利用できます。'
-      case 'invalid-photo':
-        return '写真の形式または容量を確認できませんでした。別の写真を選んでください。'
-      case 'limit-reached':
-        return '写真保存の無料枠または容量上限に達した可能性があります。再試行するか、写真を外して共有してください。'
-      case 'network-failed':
-        return '写真保存サービスへ接続できませんでした。通信状態を確認して、もう一度お試しください。'
-      case 'timeout':
-        return '写真の保存が時間内に完了しませんでした。再試行するか、写真を外して共有してください。'
-      default:
-        return '写真保存サービスで問題が発生しました。再試行するか、写真を外して共有してください。'
-    }
-  })()
-  const classification = ` エラー分類: ${error.code}`
-  const stage =
-    !error.requestId &&
-    (error.code === 'auth-failed' || error.code === 'network-failed') &&
-    clientStage
-      ? ` 処理段階: ${clientStage}`
-      : ''
-  const requestId = error.requestId
-    ? ` 問い合わせID: ${error.requestId}`
-    : ''
-  return `${message}${classification}${stage}${requestId}`
 }
 
 type CreateMode = 'edit' | 'review'
@@ -246,21 +165,6 @@ export function CreateRequestPage({
   const [mode, setMode] = useState<CreateMode>(
     initialPageState.returnState ? 'review' : 'edit',
   )
-  const [sharedUrl, setSharedUrl] = useState(
-    initialPageState.returnState?.sharedUrl ?? '',
-  )
-  const [sharedSnapshot, setSharedSnapshot] = useState(
-    initialPageState.returnState?.sharedSnapshot ?? '',
-  )
-  const [lastSharedUrl, setLastSharedUrl] = useState(loadLastSharedUrl)
-  const [shareMessage, setShareMessage] = useState(
-    initialPageState.wasNormalized
-      ? '保存されていた入力を新しい上限内に調整しました。'
-      : '',
-  )
-  const [shareStatus, setShareStatus] = useState<ShareMessageStatus>(
-    initialPageState.wasNormalized ? 'cancelled' : '',
-  )
   const [limitMessage, setLimitMessage] = useState('')
   const {
     isOpen: isCustomFormOpen,
@@ -280,23 +184,6 @@ export function CreateRequestPage({
     toggleDetails: toggleCustomDetails,
     reset: closeCustomForm,
   } = useCustomItemEditor()
-  const [isSharingRequest, setIsSharingRequest] = useState(false)
-  const [isUploadingPhotos, setIsUploadingPhotos] = useState(false)
-  const [photoUploadFailed, setPhotoUploadFailed] = useState(false)
-  const [sharingMode, setSharingMode] =
-    useState<RequestSharingMode>('fixed')
-  const [liveManagementUrl, setLiveManagementUrl] = useState('')
-  const [liveManagementSnapshot, setLiveManagementSnapshot] = useState('')
-  const [liveRequestExpiresAt, setLiveRequestExpiresAt] = useState<number>()
-  const [managementCopyMessage, setManagementCopyMessage] = useState('')
-  const [defaultPhotoUploader, setDefaultPhotoUploader] =
-    useState<ProductPhotoUploadProvider>()
-  const [defaultLiveRequestApi, setDefaultLiveRequestApi] =
-    useState<LiveRequestApi>()
-  const shareLockRef = useRef(createRequestShareLock())
-  const photoClientStageRef = useRef<ProductPhotoClientDiagnosticStage>()
-  const photoTurnstileContainerRef = useRef<HTMLDivElement>(null)
-  const liveTurnstileContainerRef = useRef<HTMLDivElement>(null)
   const pendingPhotos = usePendingProductPhotos({
     processPhoto: processProductPhoto ?? defaultProcessProductPhoto,
     ...(createProductPhotoPreviewUrl
@@ -315,77 +202,6 @@ export function CreateRequestPage({
       ),
     [manualValidationSessionToken, requestBaseUrl],
   )
-  useEffect(() => {
-    if (
-      !photoConfig.enabled ||
-      productPhotoUploadProvider ||
-      !photoTurnstileContainerRef.current
-    ) {
-      return
-    }
-    const clientDiagnostics = {
-      record(stage: ProductPhotoClientDiagnosticStage) {
-        photoClientStageRef.current = stage
-      },
-    }
-    const turnstile = new BrowserTurnstileTokenProvider(
-      photoTurnstileContainerRef.current,
-      photoConfig.turnstileSiteKey,
-      undefined,
-      undefined,
-      PRODUCT_PHOTO_TURNSTILE_ACTION,
-      clientDiagnostics,
-    )
-    setDefaultPhotoUploader(
-      new WorkerProductPhotoUploadProvider(
-        photoConfig.endpoint,
-        turnstile,
-        fetch,
-        photoConfig.validationSessionToken,
-        clientDiagnostics,
-      ),
-    )
-    return () => turnstile.dispose()
-  }, [
-    photoConfig.enabled,
-    photoConfig.endpoint,
-    photoConfig.turnstileSiteKey,
-    photoConfig.validationSessionToken,
-    productPhotoUploadProvider,
-  ])
-
-  useEffect(() => {
-    if (
-      !liveConfig.enabled ||
-      liveRequestApi ||
-      !liveTurnstileContainerRef.current
-    ) {
-      return
-    }
-    const turnstile = new BrowserTurnstileTokenProvider(
-      liveTurnstileContainerRef.current,
-      liveConfig.turnstileSiteKey,
-      undefined,
-      undefined,
-      LIVE_REQUEST_CREATE_TURNSTILE_ACTION,
-    )
-    setDefaultLiveRequestApi(
-      new WorkerLiveRequestApi(
-        liveConfig.endpoint,
-        turnstile,
-        fetch,
-        liveConfig.validationSessionToken,
-      ),
-    )
-    return () => turnstile.dispose()
-  }, [
-    liveConfig.enabled,
-    liveConfig.endpoint,
-    liveConfig.turnstileSiteKey,
-    liveConfig.validationSessionToken,
-    liveRequestApi,
-  ])
-
   const selectedItems = useMemo(
     () => buildSelectedRequestItems(effectiveProducts, draft, customItems),
     [customItems, draft, effectiveProducts],
@@ -434,6 +250,19 @@ export function CreateRequestPage({
       }),
     [customItems, draft, effectiveProducts],
   )
+
+  const {
+    sharedUrl, lastSharedUrl, shareMessage, shareStatus, setShareMessage, setShareStatus,
+    sharingMode, setSharingMode, isSharingRequest, isUploadingPhotos, photoUploadFailed,
+    photoTurnstileContainerRef, liveTurnstileContainerRef, liveManagementUrl, liveManagementSnapshot,
+    managementCopyMessage, handleCopyManagementUrl, handleShareRequest, handleShareWithoutPhotos,
+    resetSharing, isSharingActive,
+  } = useRequestSharing({
+    initialPageState, requestData, budgetContext, requestKey, setRequestKey, currentRequestSnapshot,
+    selectedItems, activePhotos, pendingPhotos, expandedProductIds, validationRequestBaseUrl,
+    manualValidationSessionToken, photoConfig, productPhotoUploadProvider, liveConfig, liveRequestApi,
+    createLiveRequestItemId,
+  })
 
   const hasResettableInput = useMemo(
     () =>
@@ -711,292 +540,6 @@ export function CreateRequestPage({
     return result
   }
 
-  const prepareRequestShare = (withoutPhotos = false) => {
-    const validation = validateDraftLimits(requestData, budgetContext, true)
-    if (!validation.valid) {
-      setShareMessage(getLimitMessage(validation.reason))
-      setShareStatus('error')
-      return undefined
-    }
-
-    const photos = withoutPhotos ? [] : activePhotos
-    const snapshot = createRequestShareSnapshot(currentRequestSnapshot, photos)
-
-    const reusableSharedUrl = sharedUrl.includes('#/l/')
-      ? buildLineDeliveryRequestUrl(sharedUrl)
-      : ''
-    const resolved = resolveSharedRequestUrl(
-      snapshot,
-      sharedSnapshot,
-      reusableSharedUrl,
-      () => {
-        if (photos.length === 0) {
-          return validation.url
-        }
-        const itemIndexes = new Map(
-          selectedItems.map((item, index) => [item.productId, index]),
-        )
-        const photoRefs = photos.map((photo) => {
-          const itemIndex = itemIndexes.get(photo.itemKey)
-          if (typeof itemIndex !== 'number') {
-            throw new Error('写真の商品参照が見つかりません。')
-          }
-          return [itemIndex, photo.token] as [number, string]
-        })
-        return buildLineDeliveryRequestUrl(
-          buildCompactRequestV4UrlFromInput(validationRequestBaseUrl, {
-            requestKey,
-            title: FIXED_REQUEST_TITLE,
-            items: selectedItems,
-            photoRefs,
-          }),
-        )
-      },
-    )
-    if (!isRequestUrlWithinShareLimit(resolved.url)) {
-      setShareMessage(getLimitMessage('url-limit'))
-      setShareStatus('error')
-      return undefined
-    }
-    return { ...resolved, photos }
-  }
-
-  const commitPreparedShare = (prepared: {
-    url: string
-    snapshot: string
-    reused: boolean
-  }) => {
-    if (!prepared.reused || prepared.url !== sharedUrl) {
-      setSharedUrl(prepared.url)
-      setSharedSnapshot(prepared.snapshot)
-      setLastSharedUrl(prepared.url)
-      saveLastSharedUrl(manualValidationSessionToken ? '' : prepared.url)
-    }
-    if (!prepared.reused) {
-      setRequestKey(createRequestKey())
-    }
-  }
-
-  const uploadPhotosForShare = async (
-    photos: readonly (typeof activePhotos)[number][],
-  ): Promise<boolean> => {
-    if (photos.length === 0) {
-      return true
-    }
-    const uploader = productPhotoUploadProvider ?? defaultPhotoUploader
-    if (!uploader) {
-      setShareMessage(
-        '写真の保存機能を準備できませんでした。通常依頼は引き続き利用できます。',
-      )
-      setShareStatus('error')
-      setPhotoUploadFailed(true)
-      return false
-    }
-    const itemKeys = photos.map((photo) => photo.itemKey)
-    photoClientStageRef.current = undefined
-    setShareMessage('')
-    setShareStatus('')
-    setPhotoUploadFailed(false)
-    pendingPhotos.setPhotoStatus(itemKeys, 'uploading')
-    setIsUploadingPhotos(true)
-    try {
-      await uploader.upload(photos)
-      pendingPhotos.setPhotoStatus(itemKeys, 'uploaded')
-      return true
-    } catch (error) {
-      pendingPhotos.setPhotoStatus(itemKeys, 'failed')
-      setPhotoUploadFailed(true)
-      setShareStatus('error')
-      setShareMessage(
-        productPhotoUploadErrorMessage(
-          error,
-          photoConfig.validationSessionToken
-            ? photoClientStageRef.current
-            : undefined,
-        ),
-      )
-      return false
-    } finally {
-      setIsUploadingPhotos(false)
-    }
-  }
-
-  const prepareLiveRequestShare = (withoutPhotos = false) => {
-    const validation = validateDraftLimits(requestData, budgetContext, true)
-    if (!validation.valid) {
-      setShareMessage(getLimitMessage(validation.reason))
-      setShareStatus('error')
-      return undefined
-    }
-    const photos = withoutPhotos ? [] : activePhotos
-    const snapshot = createRequestShareSnapshot(currentRequestSnapshot, photos)
-    return {
-      photos,
-      ...resolveLiveRequestShare({
-        snapshot,
-        sharedUrl,
-        sharedSnapshot,
-        hasManagementUrl: liveManagementUrl.includes('#/manage/'),
-        managementSnapshot: liveManagementSnapshot,
-        expiresAt: liveRequestExpiresAt,
-        now: Date.now(),
-      }),
-    }
-  }
-
-  const handleLiveRequestShare = async (withoutPhotos = false) => {
-    const prepared = prepareLiveRequestShare(withoutPhotos)
-    if (!prepared) {
-      return
-    }
-    setPhotoUploadFailed(false)
-    setIsSharingRequest(true)
-
-    if (
-      prepared.photos.length > 0 &&
-      !prepared.reused &&
-      !(await uploadPhotosForShare(prepared.photos))
-    ) {
-      return
-    }
-
-    let purchaserUrl = prepared.url
-    if (!prepared.reused) {
-      const api = liveRequestApi ?? defaultLiveRequestApi
-      if (!api) {
-        setShareMessage(
-          '更新可能な依頼の認証機能を準備できませんでした。通常依頼は引き続き利用できます。',
-        )
-        setShareStatus('error')
-        return
-      }
-      try {
-        const items = buildLiveRequestItems(
-          selectedItems,
-          prepared.photos,
-          createLiveRequestItemId,
-        )
-        const created = await api.create(items)
-        const urls = buildLiveRequestUrls(
-          validationRequestBaseUrl,
-          created.requestToken,
-          created.editSecret,
-        )
-        purchaserUrl = buildLineDeliveryRequestUrl(urls.purchaserUrl)
-        setLiveManagementUrl(urls.managementUrl)
-        setLiveManagementSnapshot(prepared.snapshot)
-        setLiveRequestExpiresAt(Date.parse(created.request.expiresAt))
-        setManagementCopyMessage('')
-        setSharedUrl(purchaserUrl)
-        setSharedSnapshot(prepared.snapshot)
-        setLastSharedUrl(purchaserUrl)
-        saveLastSharedUrl(manualValidationSessionToken ? '' : purchaserUrl)
-      } catch (error) {
-        setShareMessage(getLiveRequestFailureMessage(error))
-        setShareStatus('error')
-        return
-      }
-    }
-
-    saveCreateDraft(draft)
-    saveCreateRequestReturnState({
-      customItems,
-      expandedProductIds: [...expandedProductIds],
-      sharedUrl: manualValidationSessionToken ? '' : purchaserUrl,
-      sharedSnapshot: manualValidationSessionToken
-        ? ''
-        : prepared.snapshot,
-    })
-    setShareMessage('共有画面を開いています…')
-    setShareStatus('cancelled')
-    const result = await shareText({
-      title: REQUEST_SHARE_TITLE,
-      text: buildRequestShareMessage(purchaserUrl),
-    })
-    const notice = getShareResultMessage(result)
-    setShareMessage(notice.message)
-    setShareStatus(notice.status)
-  }
-
-  const handleShareRequest = async (withoutPhotos = false) => {
-    if (!shareLockRef.current.tryAcquire()) {
-      return
-    }
-
-    try {
-      if (sharingMode === 'live') {
-        await handleLiveRequestShare(withoutPhotos)
-        return
-      }
-      let prepared: ReturnType<typeof prepareRequestShare>
-      try {
-        prepared = prepareRequestShare(withoutPhotos)
-      } catch {
-        setShareMessage('写真付き依頼を準備できませんでした。写真を確認してください。')
-        setShareStatus('error')
-        return
-      }
-      if (!prepared) return
-
-      setPhotoUploadFailed(false)
-      setIsSharingRequest(true)
-      if (
-        prepared.photos.length > 0 &&
-        !prepared.reused &&
-        !(await uploadPhotosForShare(prepared.photos))
-      ) {
-        return
-      }
-
-      commitPreparedShare(prepared)
-
-      saveCreateDraft(draft)
-      saveCreateRequestReturnState({
-        customItems,
-        expandedProductIds: [...expandedProductIds],
-        sharedUrl: manualValidationSessionToken ? '' : prepared.url,
-        sharedSnapshot: manualValidationSessionToken
-          ? ''
-          : prepared.snapshot,
-      })
-
-      setShareMessage('共有画面を開いています…')
-      setShareStatus('cancelled')
-      const result = await shareText({
-        title: REQUEST_SHARE_TITLE,
-        text: buildRequestShareMessage(prepared.url),
-      })
-      const notice = getShareResultMessage(result)
-      setShareMessage(notice.message)
-      setShareStatus(notice.status)
-    } finally {
-      shareLockRef.current.release()
-      setIsSharingRequest(false)
-    }
-  }
-
-  const handleShareWithoutPhotos = async () => {
-    pendingPhotos.clearPhotos()
-    await handleShareRequest(true)
-  }
-
-  const handleCopyManagementUrl = async () => {
-    if (!liveManagementUrl || !navigator.clipboard?.writeText) {
-      setManagementCopyMessage(
-        '管理リンクをコピーできませんでした。選択して安全な場所へ保存してください。',
-      )
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(liveManagementUrl)
-      setManagementCopyMessage('管理リンクをコピーしました。')
-    } catch {
-      setManagementCopyMessage(
-        '管理リンクをコピーできませんでした。選択して安全な場所へ保存してください。',
-      )
-    }
-  }
-
   const handleReturnToEdit = () => {
     setShareMessage('')
     setShareStatus('')
@@ -1007,26 +550,15 @@ export function CreateRequestPage({
     resetDraft(nextDraft)
     setExpandedProductIds(new Set())
     setMode('edit')
-    setSharedUrl('')
-    setSharedSnapshot('')
-    setLastSharedUrl('')
-    saveLastSharedUrl('')
-    setShareMessage('')
-    setShareStatus('')
+    resetSharing()
     setLimitMessage('')
     setRequestKey(createRequestKey())
     pendingPhotos.clearPhotos()
-    setPhotoUploadFailed(false)
-    setSharingMode('fixed')
-    setLiveManagementUrl('')
-    setLiveManagementSnapshot('')
-    setLiveRequestExpiresAt(undefined)
-    setManagementCopyMessage('')
     closeCustomForm()
   }
 
   const handleStartNext = () => {
-    if (shareLockRef.current.isActive() || pendingPhotos.processingItemKey) {
+    if (isSharingActive() || pendingPhotos.processingItemKey) {
       return
     }
     if (
@@ -1040,7 +572,7 @@ export function CreateRequestPage({
   }
 
   const handleReset = () => {
-    if (shareLockRef.current.isActive() || pendingPhotos.processingItemKey) {
+    if (isSharingActive() || pendingPhotos.processingItemKey) {
       return
     }
     if (
