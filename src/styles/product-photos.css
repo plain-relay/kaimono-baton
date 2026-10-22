@@ -1,0 +1,132 @@
+.product-photo-attachment {
+  min-width: 0;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #dfe7e3;
+}
+
+.product-photo-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: #38544a;
+  font-size: 0.82rem;
+}
+
+.product-photo-heading span {
+  flex: 0 0 auto;
+  color: #6a7974;
+  font-size: 0.74rem;
+}
+
+.product-photo-preview {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 5.25rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
+  margin-top: 0.6rem;
+  padding: 0.55rem;
+  border: 1px solid #d6e1dc;
+  border-radius: 9px;
+  background: #f8faf9;
+}
+
+.product-photo-preview img {
+  display: block;
+  width: 5.25rem;
+  height: 5.25rem;
+  border-radius: 7px;
+  background: #fff;
+  object-fit: cover;
+}
+
+.product-photo-preview p,
+.product-photo-preview small,
+.product-photo-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.product-photo-preview small {
+  display: block;
+  margin-top: 0.2rem;
+  color: #63736d;
+}
+
+.product-photo-excluded {
+  color: #8a5a28 !important;
+  font-weight: 700;
+}
+
+.product-photo-status {
+  margin-top: 0.55rem;
+  color: #315c4d;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.product-photo-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.product-photo-actions label,
+.product-photo-actions button {
+  min-width: 0;
+  width: 100%;
+  text-align: center;
+}
+
+.product-photo-actions .is-disabled {
+  opacity: 0.42;
+  cursor: default;
+  pointer-events: none;
+}
+
+.product-photo-turnstile {
+  min-width: 0;
+}
+
+.shopping-photo {
+  display: block;
+  min-width: 0;
+  margin-top: 0.45rem;
+  color: #64746e;
+  font-size: 0.78rem;
+}
+
+.shopping-photo-button {
+  display: block;
+  width: min(100%, 9rem);
+  padding: 0;
+  border: 1px solid #d6e1dc;
+  border-radius: 8px;
+  background: #fff;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.shopping-photo-button img {
+  display: block;
+  width: 100%;
+  max-height: 8rem;
+  object-fit: cover;
+}
+
+.product-photo-dialog {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+}
+
+.product-photo-dialog img {
+  display: block;
+  width: 100%;
+  max-height: calc(100dvh - 8rem);
+  object-fit: contain;
+}

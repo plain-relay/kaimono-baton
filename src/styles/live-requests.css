@@ -1,0 +1,166 @@
+.request-sharing-mode {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.request-sharing-mode legend {
+  padding: 0 0.3rem;
+  color: #2b4039;
+  font-weight: 800;
+}
+
+.request-sharing-mode > label,
+.live-request-mode-options > label {
+  display: flex;
+  min-width: 0;
+  gap: 0.6rem;
+  align-items: flex-start;
+  color: #3f504a;
+  cursor: pointer;
+}
+
+.request-sharing-mode input[type='radio'],
+.live-request-mode-options input[type='radio'] {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
+  margin: 0.15rem 0 0;
+  accent-color: #2f6b58;
+}
+
+.request-sharing-mode label span {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.request-sharing-mode label small {
+  color: #65756f;
+  font-weight: 400;
+}
+
+.live-management-link-card {
+  display: grid;
+  min-width: 0;
+  gap: 0.55rem;
+  margin-top: 0.5rem;
+  padding: 0.8rem;
+  border: 1px solid #d8c9a7;
+  border-radius: 9px;
+  background: #fffaf0;
+}
+
+.live-management-link-card h2,
+.live-management-link-card p {
+  margin: 0;
+}
+
+.live-management-link-card textarea {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.live-request-sync-card,
+.live-request-add-card,
+.live-request-custom-fields,
+.live-request-management-list,
+.live-request-management-item {
+  display: grid;
+  min-width: 0;
+  gap: 0.65rem;
+}
+
+.live-request-sync-card .inline-actions,
+.live-request-mode-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.live-request-add-card label,
+.live-request-management-item label {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+  color: #3e504a;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.live-request-management-item {
+  padding: 0.75rem;
+  border: 1px solid #dfe5e2;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.live-request-management-item p {
+  margin: 0.15rem 0 0;
+  color: #61716b;
+  font-size: 0.8rem;
+}
+
+.live-request-change {
+  display: block;
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 6px;
+  background: #edf7f2;
+  color: #2f6653;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.live-request-change.is-strong {
+  border: 1px solid #e0b16e;
+  background: #fff6e6;
+  color: #784b0d;
+}
+
+.live-request-cancelled summary {
+  color: #764946;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.live-request-cancelled-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.7rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.live-request-cancelled-list li {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+  padding: 0.6rem;
+  border: 1px solid #e4d3d0;
+  border-radius: 8px;
+  background: #faf6f5;
+}
+
+.live-request-cancelled-list span {
+  color: #765b57;
+  font-size: 0.8rem;
+}
+
+.live-request-review {
+  border-color: #e0b16e;
+  overflow-wrap: anywhere;
+}
+
+.live-request-review h2 {
+  font-size: 1.05rem;
+}
+
+.live-request-review .live-request-cancelled-list li {
+  gap: 0.45rem;
+  border-color: #e0b16e;
+  background: #fff6e6;
+}
+
+.live-request-turnstile {
+  min-height: 1px;
+}
