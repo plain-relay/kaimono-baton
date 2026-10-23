@@ -146,7 +146,8 @@ Production workflowの `manual-on` は手書き用で、写真検証の代用品
 
 1. **レビュー確定**: Draft PRのexact base/head、必須CI、fresh read-only Codexの結果を確認。
    未解決P0/P1/公開条件に影響するP2がないことを確認し、残余riskを人間が判断する。
-   mainが動いたら新base/headで完全再レビューする。人間が別途merge承認し、Draftのready化・mergeを判断する。
+   mainが動いたら新base/headで完全再レビューする。この段階ではmergeしない。
+   High riskに必要な後段のstaging証拠をそろえた後に、人間が別途merge承認し、Draftのready化・mergeを判断する。
 2. **Cloudflareはまず読み取り**: Workers & Pages →対象Worker→Deployments/Settings/Bindingsと
    Durable Objectsで、Worker名/最新version/PhotoObject namespace/SQLite/backend/既存全classを確認。
    使用中の安全なローカル設定とdeploy履歴でmigration tag順またはexportsを照合する。履歴不明ならdeployしない。
