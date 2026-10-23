@@ -106,4 +106,23 @@ export const products: Product[] = [
 
   { id: 'diapers', name: 'おむつ', categoryId: 'baby', defaultQuantity: 1, unit: '袋', icon: '🍼', sortOrder: 1301 },
   { id: 'baby-danone', name: 'ベビーダノン', categoryId: 'baby', defaultQuantity: 1, unit: '個', icon: '🥣', sortOrder: 1302 },
+
+  // New catalog products use existing v3 snapshots, preserving published product numbers.
+  { id: 'baby-cheese', name: 'ベビーチーズ', categoryId: 'eggs-dairy', defaultQuantity: 1, unit: '個', icon: '🧀', sortOrder: 708 },
+  { id: 'latte-treatment', name: 'ラテトリートメント', categoryId: 'daily', defaultQuantity: 1, unit: '個', icon: '🧴', sortOrder: 1223 },
+  { id: 'utamaro-soap', name: 'ウタマロ石けん', categoryId: 'daily', defaultQuantity: 1, unit: '個', icon: '🧼', sortOrder: 1224 },
+  { id: 'sacre', name: 'サクレ', categoryId: 'frozen', defaultQuantity: 1, unit: '個', icon: '🍧', sortOrder: 1006 },
+  { id: 'one-year-cheese', name: '1歳チーズ', categoryId: 'baby', defaultQuantity: 1, unit: '個', icon: '🧀', sortOrder: 1303 },
+  { id: 'toilet-quickle', name: 'トイレクイックル', categoryId: 'daily', defaultQuantity: 1, unit: '個', icon: '🧻', sortOrder: 1225 },
+  { id: 'body-cream', name: 'ボディクリーム', categoryId: 'daily', defaultQuantity: 1, unit: '個', icon: '🧴', sortOrder: 1226 },
+  { id: 'cape', name: 'ケープ', categoryId: 'daily', defaultQuantity: 1, unit: '個', icon: '🧴', sortOrder: 1227 },
+  { id: 'toothpaste', name: '歯磨き粉', categoryId: 'daily', defaultQuantity: 1, unit: '個', icon: '🪥', sortOrder: 1228 },
+  { id: 'baby-barley-tea', name: 'ベビー麦茶', categoryId: 'baby', defaultQuantity: 1, unit: '個', icon: '🍼', sortOrder: 1304 },
+  { id: 'baby-meal', name: 'ベビー食', categoryId: 'baby', defaultQuantity: 1, unit: '個', icon: '🥣', sortOrder: 1305 },
+  { id: 'paper-cups', name: '紙コップ', categoryId: 'daily', defaultQuantity: 1, unit: '個', icon: '🥤', sortOrder: 1229 },
+  { id: 'frozen-karaage', name: '冷凍唐揚げ', categoryId: 'frozen', defaultQuantity: 1, unit: '個', icon: '🍗', sortOrder: 1007 },
+  { id: 'pink-kamaboko', name: 'かまぼこ ピンク', categoryId: 'fish', defaultQuantity: 1, unit: '個', icon: '🍥', sortOrder: 307 },
+  { id: 'chicken-thigh-two-pack', name: '鶏もも肉（2個入り）', categoryId: 'meat', defaultQuantity: 1, unit: 'パック', icon: '🍗', sortOrder: 403 },
+  { id: 'chocolate-jam', name: 'チョコレートジャム', categoryId: 'seasonings-dry', defaultQuantity: 1, unit: '個', icon: '🍫', sortOrder: 908 },
+  { id: 'baby-food', name: 'ベビーフード', categoryId: 'baby', defaultQuantity: 1, unit: '個', icon: '🥣', sortOrder: 1306 },
 ]
