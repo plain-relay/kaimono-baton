@@ -25,6 +25,7 @@
 1. 専用 branch `test/product-photo-staging`、Draft PR、全必須CI、exact base/head 独立レビュー。
 2. 環境ファイルを読まず写真だけONで作る `node scripts/photo-staging.mjs build`。
 3. Worker名・branch・commit・config・assets・作業ツリーを検査する `verify`。
+   deploy用buildは前後でcleanなsourceと同一HEADを要求し、未追跡fileとsrc/public等のignored入力も拒否する。
    テスト用widget/localhostのartifactはdeploy検査で拒否する。
 4. 実workerd・SQLite・static-assetsの認証→POST→GETテスト、ブラウザの0〜3枚共有/閲覧テスト。
 
@@ -145,10 +146,10 @@ Git認証/API tokenはCloudflare画面内で扱う。値をチャットへ出さ
 
 2026-10-24 のローカル結果（実Cloudflare deploy前）:
 
-- `npm test`: 1237 pass、既存2 skip。`test:worker`: 197 pass。
+- `npm test`: 1238 pass、既存2 skip。`test:worker`: 197 pass。
 - `test:coverage`: statements 92.43%、branches 87.50%、functions 95.80%、lines 92.42%。
 - `check:worker-bundle`、`build`、専用staging bundle dry-run、`git diff --check`: 成功。
-- 新規境界テスト27件を追加し、未実装の保護・buildが失敗→実装後成功することを確認。加えてブラウザが設定欠落を検出したため、
+- 新規境界テスト28件を追加し、未実装の保護・buildが失敗→実装後成功することを確認。加えてブラウザが設定欠落を検出したため、
   Viteの個別環境keyの定義へ修正し、生成JSにendpoint/Site Keyが存在することもbuild内で検査する。
 - 既存実workerd/SQLiteの20ケース成功。新規stageは無認証assets/API401、認証assets200、
   写真1/2/3枚POST200→同一bytes GET200、他Origin403、写真以外のAPI404。
@@ -158,6 +159,8 @@ Git認証/API tokenはCloudflare画面内で扱う。値をチャットへ出さ
 - widgetは公式dummy、Siteverifyは送信先HTTP fixture、共有シートは`navigator.share` fixture。
   **実widget/Secret照合・実Cloudflare・Android・iPhone・LINEの成功を意味しない**。
 - 専用画面のビルドのみが写真ON。通常の`npm run build`と公開Pages設定は変更していない。
+- 初回独立reviewのP2（dirty clientをbuild後に戻すと未review artifactを採用できる）を修正。
+  一時Git repoでdirty/未追跡public/ignored public入力拒否、build中HEAD変更拒否を回帰確認した。
 
 設定は2026-10-24に公式仕様と照合した。
 [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、
