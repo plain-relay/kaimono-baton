@@ -33,6 +33,38 @@ function turnstile(): TurnstileTokenProvider {
 }
 
 describe('WorkerProductPhotoUploadProvider', () => {
+  it.each(['challenge', 'post', 'body'] as const)(
+    'bounds an unresponsive %s and releases the upload for retry',
+    async (stage) => {
+      vi.useFakeTimers()
+      const challenge = turnstile()
+      const hang = (signal?: AbortSignal | null) => new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+      })
+      if (stage === 'challenge') {
+        vi.mocked(challenge.getToken).mockImplementation((options) => hang(options?.signal))
+      }
+      const transport = vi.fn(async (_input, init) => {
+        if (stage === 'post') return hang(init?.signal)
+        const response = Response.json({ photos: [{ token, itemKey: 'milk' }] })
+        if (stage === 'body') response.json = () => hang(init?.signal)
+        return response
+      }) as typeof fetch
+      const provider = new WorkerProductPhotoUploadProvider('https://worker.example/', challenge, transport)
+      let result: unknown
+      const upload = provider.upload([photo()]).catch((error: unknown) => { result = error })
+      try {
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(result).toMatchObject({ code: 'timeout' })
+        await upload
+        expect(challenge.reset).toHaveBeenCalledTimes(1)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('gets one token and uploads a strict multipart batch', async () => {
     const challenge = turnstile()
     const record = vi.fn()

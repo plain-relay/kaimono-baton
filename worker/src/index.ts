@@ -28,7 +28,6 @@ import { handleRequest, type HandwritingHandlerDependencies } from './handwritin
 import { handwritingJsonResponse as jsonResponse } from './handwritingResponse'
 
 export { handleRequest } from './handwritingHandler'
-export { HANDWRITING_REQUEST_ID_HEADER } from './handwritingResponse'
 
 export {
   hasHandwritingConfiguration,

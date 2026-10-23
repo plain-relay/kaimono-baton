@@ -8,7 +8,6 @@ import type {
   SharedRequestObject,
 } from '../src/sharedRequestObject'
 import {
-  HANDWRITING_REQUEST_ID_HEADER,
   hasHandwritingConfiguration,
   hasPhotoConfiguration,
   hasSharedRequestConfiguration,
@@ -17,6 +16,7 @@ import {
   type WorkerDependencies,
   type WorkerEnv,
 } from '../src/index'
+import { HANDWRITING_REQUEST_ID_HEADER } from '../src/handwritingResponse'
 import {
   MAX_IMAGE_BYTES,
   MAX_PRODUCT_CANDIDATES,
