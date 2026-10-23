@@ -20,6 +20,13 @@ import {
 import { countUserCharacters } from './textLength'
 import { buildLineDeliveryRequestUrl } from './lineDeliveryUrl'
 
+// v2 represents only the published vocabulary; later catalog additions use v3 snapshots.
+const publishedProducts = SHARE_PRODUCT_IDS_V2.map((id) => {
+  const product = products.find((candidate) => candidate.id === id)
+  if (!product) throw new Error(`Missing published product: ${id}`)
+  return product
+})
+
 function createDraft(): CreateDraftState {
   return Object.fromEntries(
     products.map((product) => [product.id, { quantity: 0, memo: '' }]),
@@ -44,8 +51,8 @@ function createVariedConditions(totalCharacters: number): string[] {
   )
   let seed = 0x6d2b79f5
   let remaining = totalCharacters
-  return products.map((_, productIndex) => {
-    const remainingProducts = products.length - productIndex
+  return publishedProducts.map((_, productIndex) => {
+    const remainingProducts = publishedProducts.length - productIndex
     const length = Math.min(30, Math.ceil(remaining / remainingProducts))
     let condition = ''
     for (let index = 0; index < length; index += 1) {
@@ -58,10 +65,8 @@ function createVariedConditions(totalCharacters: number): string[] {
 }
 
 describe('v2 fixed product numbers', () => {
-  it('contains every current master product once and locks the published order', () => {
-    expect(new Set(SHARE_PRODUCT_IDS_V2)).toEqual(
-      new Set(products.map((product) => product.id)),
-    )
+  it('keeps every published product available and locks the published order', () => {
+    expect(publishedProducts).toHaveLength(93)
     expect(new Set(SHARE_PRODUCT_IDS_V2).size).toBe(SHARE_PRODUCT_IDS_V2.length)
 
     let orderChecksum = 2_166_136_261
@@ -137,7 +142,7 @@ describe('v2 request encode and decode', () => {
   it('round-trips all quantity codes, Japanese, symbols, emoji, and custom items', () => {
     const draft = createDraft()
     ;[0, 1, 9, 10, 19, 20].forEach((quantity, index) => {
-      const product = products[index]
+      const product = publishedProducts[index]
       draft[product.id] = {
         quantity,
         memo: quantity > 0 ? `条件${index}😀 &+=?#` : '',
@@ -167,9 +172,9 @@ describe('v2 request encode and decode', () => {
     expect(decoded.items.at(-1)).toMatchObject({ unit: '個', memo: undefined })
   })
 
-  it('round-trips all current products with irregular quantities from 1 through 20', () => {
+  it('round-trips all published v2 products with irregular quantities from 1 through 20', () => {
     const draft = createDraft()
-    products.forEach((product, index) => {
+    publishedProducts.forEach((product, index) => {
       draft[product.id] = {
         quantity: (index % 20) + 1,
         memo: index % 4 === 0 ? `個別条件${index}` : '',
@@ -178,9 +183,9 @@ describe('v2 request encode and decode', () => {
     const decoded = decodeCompactRequest(
       encodeCompactRequest(buildCompactRequestPayload(createInput({ draft }))),
     )
-    expect(decoded.items).toHaveLength(products.length)
+    expect(decoded.items).toHaveLength(publishedProducts.length)
     expect(decoded.items.map((item) => item.quantity)).toEqual(
-      products.map((_, index) => (index % 20) + 1),
+      publishedProducts.map((_, index) => (index % 20) + 1),
     )
   })
 
@@ -300,10 +305,10 @@ describe('v2 request encode and decode', () => {
 })
 
 describe('v2 URL stress budget', () => {
-  it('keeps all current products at quantity 20 with 1,000 varied condition characters under 2,200', () => {
+  it('keeps all published v2 products at quantity 20 with 1,000 varied condition characters under 2,200', () => {
     const conditions = createVariedConditions(1000)
     const draft = createDraft()
-    products.forEach((product, index) => {
+    publishedProducts.forEach((product, index) => {
       draft[product.id] = { quantity: 20, memo: conditions[index] }
     })
     expect(conditions.reduce((total, condition) => total + countUserCharacters(condition), 0)).toBe(1000)

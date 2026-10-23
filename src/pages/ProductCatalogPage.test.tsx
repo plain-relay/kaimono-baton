@@ -9,6 +9,7 @@ import {
   MAX_HOUSEHOLD_PRODUCTS,
 } from '../constants/requestLimits'
 import { products } from '../data/products'
+import { SHARE_PRODUCT_IDS_V2 } from '../data/shareProductIdsV2'
 import type { HouseholdCatalog } from '../types/householdCatalog'
 import {
   CATALOG_BACKUP_RECEIPT_KEY,
@@ -478,8 +479,10 @@ describe('ProductCatalogPage', () => {
       revision: 1,
       updatedAt: now,
       overrides: Object.fromEntries(
-        products.map((product) => [
-          product.id,
+        // Keep this valid historical-size fixture stable as the catalog grows.
+        // The adjacent tests cover rejection at the character and byte limits.
+        SHARE_PRODUCT_IDS_V2.map((productId) => [
+          productId,
           {
             name: familyEmoji.repeat(30),
             unit: familyEmoji.repeat(10),
