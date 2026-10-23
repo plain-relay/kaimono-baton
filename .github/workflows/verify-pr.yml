@@ -38,6 +38,9 @@ jobs:
       - name: Worker bundle check
         run: npm run check:worker-bundle
 
+      - name: Photo workerd and SQLite integration
+        run: node scripts/photo-runtime-check.mjs
+
       - name: Coverage
         run: npm run test:coverage
 

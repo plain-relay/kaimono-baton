@@ -10,6 +10,7 @@ import { isProductPhotoToken } from './photoToken'
 import type { PendingPhoto } from './types'
 
 export const PRODUCT_PHOTO_TURNSTILE_ACTION = 'product_photo_upload'
+const UPLOAD_TIMEOUT_MS = 60_000
 
 export type ProductPhotoUploadErrorCode =
   | 'auth-failed'
@@ -222,16 +223,27 @@ export class WorkerProductPhotoUploadProvider
     options: { signal?: AbortSignal } = {},
   ): Promise<void> {
     validatePhotos(photos)
+    // Include challenge loading and response-body reads in the deadline. The
+    // Worker's deadline cannot help when the browser never receives a response.
+    const controller = new AbortController()
+    let timedOut = false
+    const abortForCaller = () => controller.abort()
+    options.signal?.addEventListener('abort', abortForCaller, { once: true })
+    if (options.signal?.aborted) controller.abort()
+    const timeout = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, UPLOAD_TIMEOUT_MS)
     try {
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
           let token: string
           try {
             token = await this.turnstile.getToken({
-              signal: options.signal,
+              signal: controller.signal,
             })
           } catch (error) {
-            if (options.signal?.aborted) {
+            if (controller.signal.aborted) {
               throw new DOMException(
                 'The operation was aborted.',
                 'AbortError',
@@ -262,11 +274,11 @@ export class WorkerProductPhotoUploadProvider
               {
                 method: 'POST',
                 body,
-                signal: options.signal,
+                signal: controller.signal,
               },
             )
           } catch (error) {
-            if (options.signal?.aborted) {
+            if (controller.signal.aborted) {
               throw new DOMException(
                 'The operation was aborted.',
                 'AbortError',
@@ -310,10 +322,16 @@ export class WorkerProductPhotoUploadProvider
       if (options.signal?.aborted) {
         throw new DOMException('The operation was aborted.', 'AbortError')
       }
+      if (timedOut) {
+        throw new ProductPhotoUploadError('timeout')
+      }
       if (error instanceof ProductPhotoUploadError) {
         throw error
       }
       throw new ProductPhotoUploadError('service-unavailable')
+    } finally {
+      clearTimeout(timeout)
+      options.signal?.removeEventListener('abort', abortForCaller)
     }
   }
 }
