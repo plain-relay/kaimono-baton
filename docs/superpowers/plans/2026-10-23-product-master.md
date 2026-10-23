@@ -57,7 +57,9 @@ No runtime changes beyond catalog data; no dependency, lockfile, workflow, capab
 
 ## Rollback
 
-Revert this task's catalog and test changes. No storage migration or external rollback is needed. Links created with new product snapshots remain decodable after rollback because they carry names, units, and categories.
+Before release or any saved use of the new product IDs, the task can be reverted. After release, retain all 17 product IDs and their catalog definitions and fix forward. Do not recommend a blanket catalog revert or deployment of the pre-update master: household overrides and recovery files customized for new base IDs are rejected by older masters, and a subsequent old-client save can replace settings with defaults. Never delete saved catalog generations to make an older build load.
+
+Existing pre-update household catalogs/backups continue to load in the new build. New fixed-request snapshot links also remain readable by pre-update masters because they carry names, units, and categories; this does not imply that newer household override/backups are readable by an older master. A rollback that removes new IDs would require a separately reviewed recovery/migration design and is outside this task. No storage migration or external operation is performed here.
 
 ## Review contract
 
