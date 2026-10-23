@@ -5,6 +5,11 @@ import { pathToFileURL } from 'node:url'
 import sharp from 'sharp'
 import lzString from 'lz-string'
 const { decompressFromEncodedURIComponent } = lzString
+const origin = process.env.PHOTO_CHECK_ORIGIN ?? 'http://localhost:4178'
+if (!['http://localhost:4178', 'http://localhost:4186'].includes(origin)) throw new Error('LOCAL_PHOTO_CHECK_ONLY')
+const staging = origin !== 'http://localhost:4178'
+const contextOptions = { viewport: { width: 390, height: 844 },
+  ...(staging ? { httpCredentials: { username: 'staging', password: process.env.PHOTO_CHECK_FIXTURE_PASSWORD } } : {}) }
 
 const { chromium } = await import(process.env.PHOTO_CHECK_PLAYWRIGHT_PATH
   ? pathToFileURL(process.env.PHOTO_CHECK_PLAYWRIGHT_PATH).href : 'playwright')
@@ -21,7 +26,7 @@ const source = await sharp(raw, { raw: { width: 1600, height: 800, channels: 3 }
 try {
   for (const count of [0, 1, 2, 3]) {
     step = `browser-${count}`
-    const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+    const context = await browser.newContext(contextOptions)
     await context.addInitScript(() => {
       window.photoCheck = { shares: [], cancel: false, photoBytes: [] }
       const nativeFetch = window.fetch
@@ -44,8 +49,8 @@ try {
         posts++
       }
     })
-    await page.goto('http://localhost:4178/#/create')
-    if (count === 0) {
+    await page.goto(`${origin}/#/create`)
+    if (count === 0 && !staging) {
       for (const orientation of [1, 8]) {
         const fixture = await sharp(raw, { raw: { width: 1600, height: 800, channels: 3 } })
           .withMetadata({ orientation }).jpeg().toBuffer()
@@ -84,7 +89,7 @@ try {
     if (count === 1) {
       await page.evaluate(() => { window.photoCheck.cancel = true })
       await page.route('**/v1/photos/batch', (route) => route.fulfill({ status: 503,
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': 'http://localhost:4178' },
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': origin },
         body: JSON.stringify({ code: 'SERVICE_UNAVAILABLE' }) }))
     }
     await page.getByRole('button', { name: 'LINEで送る', exact: true }).click()
@@ -125,7 +130,7 @@ try {
         assert.ok(bytes.length <= 500 * 1024)
     }
     // A fresh purchaser context proves no creator session is needed.
-    const buyer = await browser.newContext({ viewport: { width: 390, height: 844 } })
+    const buyer = await browser.newContext(contextOptions)
     const recipient = await buyer.newPage()
     await recipient.goto(url.toString())
     step = `purchase-controls-${count}`

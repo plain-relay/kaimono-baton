@@ -14,3 +14,4 @@ worker/.dev.vars
 worker/wrangler.toml
 .wrangler
 .manual-test
+.photo-staging

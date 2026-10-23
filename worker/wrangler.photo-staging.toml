@@ -1,0 +1,28 @@
+# Independent, initially empty Worker only. Never copy this onto production.
+name = "kaimono-baton-photo-staging"
+main = "src/photoStaging.ts"
+compatibility_date = "2026-07-26"
+workers_dev = true
+preview_urls = false
+keep_vars = true
+
+[assets]
+directory = "../.photo-staging/assets"
+binding = "ASSETS"
+run_worker_first = true
+not_found_handling = "single-page-application"
+
+[[durable_objects.bindings]]
+name = "PHOTO_OBJECTS"
+class_name = "PhotoObject"
+# No script_name: this belongs exclusively to this new Worker.
+
+[[migrations]]
+tag = "photo-staging-v1"
+new_sqlite_classes = ["PhotoObject"]
+
+[observability]
+enabled = false
+
+# Runtime variables/secrets are entered by a human in THIS Worker's dashboard.
+# No [vars]: keep_vars preserves the human-controlled staging stop/expiry flag.

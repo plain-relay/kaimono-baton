@@ -41,6 +41,12 @@ jobs:
       - name: Photo workerd and SQLite integration
         run: node scripts/photo-runtime-check.mjs
 
+      - name: Independent photo staging runtime and asset authentication
+        run: node scripts/photo-staging-runtime-check.mjs
+
+      - name: Independent photo staging bundle check (no deploy)
+        run: npx wrangler deploy --config worker/wrangler.photo-staging.toml --dry-run --outdir .wrangler/photo-staging-dry-run
+
       - name: Coverage
         run: npm run test:coverage
 
