@@ -8,7 +8,6 @@ import {
   MAX_CATALOG_RECOVERY_JSON_CHARS,
   MAX_HOUSEHOLD_PRODUCTS,
 } from '../constants/requestLimits'
-import { products } from '../data/products'
 import { SHARE_PRODUCT_IDS_V2 } from '../data/shareProductIdsV2'
 import type { HouseholdCatalog } from '../types/householdCatalog'
 import {
