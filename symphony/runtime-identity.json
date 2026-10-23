@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "symphonyBaseSha": "8001b52e3062495a16e520e4ceaf8f9de868c4d0",
+  "approvedPatchSha256": "e43cd3df8339b31ed9964132f4be5aa02e637c419cb91851e37d28a5d6907df4",
+  "expectedPostPatchTreeSha": "7ecf6b930bc4e4f78e107be570dfef60d0b6991b"
+}
