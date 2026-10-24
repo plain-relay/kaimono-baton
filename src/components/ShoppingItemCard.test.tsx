@@ -4,6 +4,28 @@ import type { ShoppingRequestItemPayload } from '../types/shopping'
 import { ShoppingItemCard } from './ShoppingItemCard'
 
 describe('ShoppingItemCard information order', () => {
+  it.each([
+    ['pending', '', false, false, false],
+    ['notBuying', '', false, false, false],
+    ['consulting', '', false, false, false],
+    ['inCart', '国産', false, false, false],
+    ['inCart', '', false, false, true],
+    ['verified', '国産', false, false, true],
+    ['verified', '', true, false, false],
+    ['verified', '', false, true, false],
+  ] as const)('compacts %s only when confirmation, consultation and change notices permit it', (status, memo, unresolved, changed, compact) => {
+    const item: ShoppingRequestItemPayload = { id: 'test', productId: 'test', productNameSnapshot: '合成商品',
+      quantity: 2, unit: '個', memo, categoryIdSnapshot: 'other', categoryNameSnapshot: 'その他', iconSnapshot: '', sortOrderSnapshot: 1 }
+    const markup = renderToStaticMarkup(<ShoppingItemCard item={item} status={status}
+      consultation={unresolved ? { itemId: item.id, reason: 'other', note: '確認？', status: 'shared' } : undefined}
+      changeNotice={changed ? <span>未確認変更</span> : undefined}
+      isPurchaseLocked={false} isConsultationLocked={false} onAddToCart={() => undefined}
+      onOpenConditionConfirmation={() => undefined} onOpenConsultation={() => undefined} onReset={() => undefined} />)
+    expect(markup.includes(' is-compact')).toBe(compact)
+    if (compact) expect(markup).toContain('aria-expanded="false"')
+    if (changed) expect(markup).toContain('未確認変更')
+  })
+
   it.each([[1, '玉'], [1, '袋'], [2, '個']] as const)(
     'keeps quantity %s and unit %s together in the title and purchase action',
     (quantity, unit) => {

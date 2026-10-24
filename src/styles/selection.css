@@ -2,6 +2,11 @@
   background: #f8faf9;
 }
 
+.product-search .secondary-button {
+  margin-top: 0.65rem;
+  width: 100%;
+}
+
 .about-card p {
   margin: 0.55rem 0 0;
   color: #53625d;

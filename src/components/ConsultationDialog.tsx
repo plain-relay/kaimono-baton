@@ -1,8 +1,9 @@
+import { useEffect, useRef, useState } from 'react'
 import type {
   ShoppingRequestItemPayload,
   UnavailableReason,
 } from '../types/shopping'
-import { getUnavailableReasonLabel } from '../utils/shoppingMessages'
+import { buildIndividualConsultationMessage, CONSULTATION_TEMPLATES, getUnavailableReasonLabel } from '../utils/shoppingMessages'
 import { ImeAwareTextInput } from './ImeAwareTextInput'
 import { ShoppingDialog } from './ShoppingDialog'
 
@@ -42,6 +43,21 @@ export function ConsultationDialog({
   const titleId = `consultation-title-${item.id}`
   const descriptionId = `consultation-description-${item.id}`
   const canShare = Boolean(selectedReason || note.trim())
+  const [pendingTemplate, setPendingTemplate] = useState<string | null>(null)
+  const focusNoteRef = useRef(false)
+  const noteId = `consultation-note-${item.id}`
+  useEffect(() => {
+    if (focusNoteRef.current && pendingTemplate === null) {
+      focusNoteRef.current = false
+      document.getElementById(noteId)?.focus()
+    }
+  }, [note, noteId, pendingTemplate])
+  const applyTemplate = (text: string) => {
+    focusNoteRef.current = true
+    onReasonChange(undefined)
+    onNoteChange(text)
+    setPendingTemplate(null)
+  }
 
   return (
     <ShoppingDialog
@@ -56,9 +72,28 @@ export function ConsultationDialog({
         {item.memo ? <span>条件: {item.memo}</span> : null}
       </div>
 
+      <div className="consultation-template-actions" role="group" aria-label="定型相談">
+        {CONSULTATION_TEMPLATES.map((template) => (
+          <button key={template.label} type="button" className="secondary-button" disabled={isSharing}
+            onClick={() => note.trim() && note !== template.note ? setPendingTemplate(template.note) : applyTemplate(template.note)}>
+            {template.label}
+          </button>
+        ))}
+      </div>
+      {pendingTemplate !== null ? (
+        <div className="info-card" role="group" aria-label="相談文の置き換え確認">
+          <p>入力済みの文章を定型文に置き換えますか？</p>
+          <div className="inline-actions">
+            <button type="button" className="secondary-button" disabled={isSharing} onClick={() => applyTemplate(pendingTemplate)}>定型文に置き換える</button>
+            <button type="button" className="ghost-button" onClick={() => setPendingTemplate(null)}>入力を残す</button>
+          </div>
+        </div>
+      ) : null}
+
       <label className="stack-field">
         <span>質問・伝えたいこと</span>
         <ImeAwareTextInput
+          id={noteId}
           value={note}
           onCommit={(candidate) => {
             onNoteChange(candidate)
@@ -70,6 +105,12 @@ export function ConsultationDialog({
         />
       </label>
       <p className="helper-text">質問は状況を選ばずに送れます。</p>
+      {canShare ? (
+        <details className="consultation-message-preview">
+          <summary>共有する相談文を確認</summary>
+          <pre>{buildIndividualConsultationMessage(item, { reason: selectedReason ?? 'other', note })}</pre>
+        </details>
+      ) : null}
       <div className="shopping-dialog-actions consultation-dialog-actions">
         <button
           type="button"

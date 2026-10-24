@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   CheckedItemStatus,
   ConsultationEntry,
@@ -10,7 +10,7 @@ import {
   getUnavailableReasonLabel,
   isFreeQuestion,
 } from '../utils/shoppingMessages'
-import { hasCondition } from '../utils/shoppingState'
+import { hasCondition, isCartStatus } from '../utils/shoppingState'
 
 type ShoppingItemCardProps = {
   item: ShoppingRequestItemPayload
@@ -61,9 +61,41 @@ export function ShoppingItemCard({
   const effectiveStatus = status === 'consulting' ? 'pending' : status
   const unresolvedConsultation =
     consultation?.status === 'queued' || consultation?.status === 'shared'
+  const isCompact = isCartStatus(status) &&
+    (status === 'verified' || !conditionItem) && !unresolvedConsultation && !changeNotice
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false)
+  const cardRef = useRef<HTMLElement>(null)
+  const summaryRef = useRef<HTMLButtonElement>(null)
+  const detailsRef = useRef<HTMLDivElement>(null)
+  const previousCompactRef = useRef(isCompact)
+  const restoreActionFocusRef = useRef(false)
+  const detailsId = `shopping-details-${item.id}`
+
+  useEffect(() => {
+    if (previousCompactRef.current !== isCompact) {
+      setIsDetailsOpen(false)
+      // Keep keyboard focus on a visible control when purchase/Undo changes the view.
+      if (restoreActionFocusRef.current || cardRef.current?.contains(document.activeElement)) {
+        if (isCompact) summaryRef.current?.focus()
+        else detailsRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus()
+      }
+      previousCompactRef.current = isCompact
+      restoreActionFocusRef.current = false
+    }
+  }, [isCompact])
 
   return (
-    <article className={`shopping-item-card is-${effectiveStatus}`}>
+    <article ref={cardRef} className={`shopping-item-card is-${effectiveStatus}${isCompact ? ' is-compact' : ''}`}>
+      <button ref={summaryRef} type="button" className="shopping-compact-summary"
+        hidden={!isCompact} aria-expanded={isDetailsOpen} aria-controls={detailsId}
+        aria-label={`${item.productNameSnapshot} ${item.quantity}${item.unit} 購入済みの詳細を${isDetailsOpen ? '閉じる' : '開く'}`}
+        onClick={() => setIsDetailsOpen((current) => !current)}>
+        <strong>{item.productNameSnapshot}</strong>
+        <span>{item.quantity}{item.unit}</span>
+        <span>購入済み</span>
+        <span aria-hidden="true">{isDetailsOpen ? '▲' : '▼'}</span>
+      </button>
+      <div ref={detailsRef} id={detailsId} className="shopping-item-details" hidden={isCompact && !isDetailsOpen}>
       <span className="shopping-icon" aria-hidden="true">
         {item.iconSnapshot}
       </span>
@@ -112,7 +144,10 @@ export function ShoppingItemCard({
           <button
             type="button"
             className="primary-button shopping-cart-button"
-            onClick={onAddToCart}
+            onClick={(event) => {
+              restoreActionFocusRef.current = document.activeElement === event.currentTarget
+              onAddToCart()
+            }}
             disabled={isPurchaseLocked}
             aria-label={`${item.productNameSnapshot}を${item.quantity}${item.unit}かごに入れる`}
           >
@@ -146,7 +181,10 @@ export function ShoppingItemCard({
           <button
             type="button"
             className="ghost-button shopping-secondary-button"
-            onClick={onReset}
+            onClick={(event) => {
+              restoreActionFocusRef.current = document.activeElement === event.currentTarget
+              onReset()
+            }}
             aria-label={`${item.productNameSnapshot}を未購入に戻す`}
             disabled={isPurchaseLocked}
           >
@@ -154,6 +192,7 @@ export function ShoppingItemCard({
           </button>
         ) : null}
       </span>
+      </div>
     </article>
   )
 }

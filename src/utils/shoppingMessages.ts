@@ -12,6 +12,14 @@ const UNAVAILABLE_REASON_LABELS: Record<UnavailableReason, string> = {
   other: 'その他',
 }
 
+// Templates use the existing other + note question representation; no stored enum.
+export const CONSULTATION_TEMPLATES = [
+  { label: '売り切れ', note: '指定の商品が売り切れです。代わりの商品を買ってもいいですか？' },
+  { label: '別メーカーの商品ならある', note: '指定の商品がありません。別メーカーの同等品ならあります。代わりに買ってもいいですか？' },
+  { label: 'サイズ違いならある', note: '指定のサイズがありません。サイズ違いの商品ならあります。代わりに買ってもいいですか？' },
+  { label: '商品が見つからない', note: '指定の商品が見つかりません。売り場や商品の特徴を教えてもらえますか？' },
+] as const
+
 export type ShoppingItemIssueEntry = {
   item: ShoppingRequestItemPayload
   issue?: ItemIssue
@@ -63,7 +71,9 @@ export function buildIndividualConsultationMessage(
     ...(note ? [`補足：${note}`] : []),
   ]
 
-  return ['【おつかい相談】', '', ...details, '', '別の商品でよいですか？'].join('\n')
+  return ['【おつかい相談】', '', ...details,
+    ...(/[?？]/u.test(note) ? [] : ['', '別の商品でよいですか？']),
+  ].join('\n')
 }
 
 export function buildBulkConsultationMessage(entries: ShoppingItemIssueEntry[]): string {

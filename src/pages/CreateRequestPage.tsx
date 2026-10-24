@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CreateRequestBottomActions } from '../components/CreateRequestBottomActions'
 import { CustomItemsSection } from '../components/CustomItemsSection'
 import { HiddenSelectedProductsSection } from '../components/HiddenSelectedProductsSection'
 import type { CommitTextResult } from '../components/ImeAwareTextInput'
 import { ProductSelectionSections } from '../components/ProductSelectionSections'
+import { ProductSearch } from '../components/ProductSearch'
 import { RequestLimitNotice } from '../components/RequestLimitNotice'
 import { RequestReviewView } from '../components/RequestReviewView'
 import {
@@ -12,6 +13,7 @@ import {
 import { FIXED_REQUEST_TITLE } from '../constants/request'
 import {
   MAX_CUSTOM_ITEM_NAME_CHARS,
+  MAX_CUSTOM_ITEMS,
   MAX_CUSTOM_ITEM_UNIT_CHARS,
   MAX_ITEM_CONDITION_CHARS,
   MAX_ITEM_QUANTITY,
@@ -70,6 +72,7 @@ import {
   type DraftChangeResult,
 } from '../utils/draftLimits'
 import { createId } from '../utils/id'
+import { matchesProductSearch, normalizeProductSearch } from '../utils/productSearch'
 import {
   calculateRequestBudget,
   countTotalConditionCharacters,
@@ -166,6 +169,8 @@ export function CreateRequestPage({
     initialPageState.returnState ? 'review' : 'edit',
   )
   const [limitMessage, setLimitMessage] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const focusCustomNameRef = useRef(false)
   const {
     isOpen: isCustomFormOpen,
     editingIndex: editingCustomIndex,
@@ -184,6 +189,12 @@ export function CreateRequestPage({
     toggleDetails: toggleCustomDetails,
     reset: closeCustomForm,
   } = useCustomItemEditor()
+  useEffect(() => {
+    if (isCustomFormOpen && focusCustomNameRef.current) {
+      focusCustomNameRef.current = false
+      document.getElementById('custom-item-name')?.focus()
+    }
+  }, [isCustomFormOpen])
   const pendingPhotos = usePendingProductPhotos({
     processPhoto: processProductPhoto ?? defaultProcessProductPhoto,
     ...(createProductPhotoPreviewUrl
@@ -307,11 +318,11 @@ export function CreateRequestPage({
         .map((category) => ({
           category,
           items: visibleProducts
-            .filter((product) => product.categoryId === category.id)
+            .filter((product) => product.categoryId === category.id && matchesProductSearch(product.name, searchQuery))
             .sort((a, b) => a.sortOrder - b.sortOrder),
         }))
         .filter((group) => group.items.length > 0),
-    [visibleProducts],
+    [visibleProducts, searchQuery],
   )
 
   const hiddenSelectedProducts = useMemo(
@@ -702,6 +713,20 @@ export function CreateRequestPage({
             item.quantity > 0,
           )
         }
+      />
+
+      <ProductSearch
+        query={searchQuery}
+        isSearching={Boolean(normalizeProductSearch(searchQuery))}
+        resultCount={groupedProducts.reduce((total, group) => total + group.items.length, 0)}
+        canAddCustom={!isCustomFormOpen && customItems.length < MAX_CUSTOM_ITEMS}
+        onQueryChange={setSearchQuery}
+        onAddCustom={() => {
+          if (isCustomFormOpen || customItems.length >= MAX_CUSTOM_ITEMS) return
+          focusCustomNameRef.current = true
+          openCustomForm()
+          applyPendingTextChange('name', searchQuery.trim(), MAX_CUSTOM_ITEM_NAME_CHARS, 'custom-name-limit')
+        }}
       />
 
       <ProductSelectionSections
