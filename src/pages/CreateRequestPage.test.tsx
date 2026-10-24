@@ -120,6 +120,51 @@ describe('CreateRequestPage simplified request form', () => {
     window.localStorage.setItem('otsukai:createDraft', JSON.stringify(saved))
   }
 
+  it('searches the effective visible catalog and preserves shared draft quantities and conditions', async () => {
+    const catalog = addHouseholdProduct(updateBaseProduct(createEmptyHouseholdCatalog(), 'apple',
+      { name: '家庭のりんご', unit: '玉', categoryId: 'fruits', hidden: true }),
+      { name: '家庭のMILK', unit: '本', categoryId: 'eggs-dairy' })
+    window.localStorage.setItem('otsukai:householdCatalog:v2', JSON.stringify(catalog))
+    await renderPage()
+    const search = '.product-search input'
+    await inputText(search, '牛乳')
+    expect(container.querySelectorAll('.product-row')).toHaveLength(2)
+    await clickAndFlush(container.querySelector('[aria-label^="牛乳を1本増やす"]')!)
+    await clickAndFlush(container.querySelector('[aria-label^="牛乳を1本増やす"]')!)
+    await clickAndFlush(container.querySelector('[aria-label^="牛乳の条件を開く"]')!)
+    await inputText('[aria-label="牛乳の条件"]', '低脂肪')
+    await inputText(search, '家庭の')
+    expect([...container.querySelectorAll('.product-row')].map((row) => row.getAttribute('aria-label'))).toEqual(['家庭のMILK、未選択'])
+    expect(container.querySelector('.bottom-bar')?.textContent).toContain('1')
+    await inputText(search, ' milk ')
+    expect(container.querySelectorAll('.product-row')).toHaveLength(1)
+    await clickAndFlush(button('検索をクリア'))
+    expect(container.querySelector('[aria-label^="牛乳を1本増やす"]')?.getAttribute('aria-label')).toContain('現在2本')
+    expect((container.querySelector('[aria-label="牛乳の条件"]') as HTMLInputElement).value).toBe('低脂肪')
+    await clickAndFlush(button('確認へ'))
+    expect(container.textContent).toContain('低脂肪')
+  })
+
+  it('keeps IME composition text and prefills a no-match custom item through the existing limits', async () => {
+    await renderPage()
+    const input = container.querySelector<HTMLInputElement>('.product-search input')!
+    act(() => input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })))
+    await inputText('.product-search input', 'ぎゅう')
+    expect(input.value).toBe('ぎゅう')
+    await inputText('.product-search input', '牛乳')
+    act(() => input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '牛乳' })))
+    expect(input.value).toBe('牛乳')
+    expect(container.querySelectorAll('.product-row')).toHaveLength(2)
+    await inputText('.product-search input', '合成テスト用の品'.repeat(10))
+    await clickAndFlush(button('この商品名で自由追加'))
+    const customName = container.querySelector<HTMLInputElement>('#custom-item-name')!
+    expect([...customName.value]).toHaveLength(30)
+    expect(document.activeElement).toBe(customName)
+    expect(button('この商品名で自由追加').disabled).toBe(true)
+    await clickAndFlush(button('追加'))
+    expect(container.querySelector('.custom-items-list')?.textContent).toContain('合成テスト用の品')
+  })
+
   it('resumes explicit empty conditions and restores defaults only when starting the next list', async () => {
     const savedDraft = { apple: { quantity: 1, memo: '' }, 'pork-koma': { quantity: 2, memo: '今回だけ外国産も可' } }
     window.localStorage.setItem('otsukai:createDraft', JSON.stringify(savedDraft))

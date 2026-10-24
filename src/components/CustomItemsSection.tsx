@@ -105,6 +105,7 @@ export function CustomItemsSection({
           <label className="stack-field">
             <span>商品名</span>
             <ImeAwareTextInput
+              id="custom-item-name"
               value={customName}
               aria-describedby="custom-name-count"
               onCommit={onNameCommit}
