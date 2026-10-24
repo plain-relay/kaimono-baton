@@ -5,6 +5,11 @@
 実行計画は[PRODUCT_PHOTO_RECOVERY_PLAN.md](PRODUCT_PHOTO_RECOVERY_PLAN.md)。
 baseは `ea2582f6f4f14bedf98b9591ce281fbfff8aa654`。最終head、CI、独立レビューはDraft PR本文に記録する。
 
+2026-10-24追記：本人のAndroid/LINE実機結果と、明示承認による無料写真向けの公開条件見直しは
+[PRODUCT_PHOTO_FREE_RELEASE.md](PRODUCT_PHOTO_FREE_RELEASE.md)を参照する。
+本書の未検証欄とSection14参照は作成時点の調査記録。無料の商品写真だけは新Section15で判定し、
+有料βの記録を達成済みにはしない。実装/レビュー/merge/Productionの役割分離は変更しない。
+
 ## 原因と証拠の区別
 
 1. **UI非表示は意図された設定**。公開Pagesの `handwriting-deployment-state.json` は上記base、

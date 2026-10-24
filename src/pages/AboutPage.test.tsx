@@ -133,6 +133,30 @@ describe('home and about pages', () => {
     expect(onBackHome).toHaveBeenCalledTimes(1)
   })
 
+  it('explains photo retention, forwarding and unverified devices when photos are enabled', () => {
+    act(() => root.render(
+      <AboutPage onBackHome={() => undefined} productPhotosEnabled={true} />,
+    ))
+
+    expect(container.textContent).toContain('商品写真（無料）')
+    expect(container.textContent).toContain('14日間')
+    expect(container.textContent).toContain('バックアップ')
+    expect(container.textContent).toContain('EXIF')
+    expect(container.textContent).toContain('転送された相手')
+    expect(container.textContent).toContain('個人情報を写さない')
+    expect(container.textContent).toContain('iPhone Safariは未検証')
+    expect(container.textContent).not.toContain('写真、更新可能な依頼')
+    expect(container.textContent).toContain('写真なしでも通常の依頼')
+  })
+
+  it('does not advertise photo availability while photos are disabled', () => {
+    act(() => root.render(
+      <AboutPage onBackHome={() => undefined} productPhotosEnabled={false} />,
+    ))
+    expect(container.textContent).not.toContain('商品写真（無料）')
+    expect(container.textContent).toContain('写真、更新可能な依頼')
+  })
+
   it('explains fixed and live request storage only when live requests are enabled', () => {
     act(() =>
       root.render(
