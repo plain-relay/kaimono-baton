@@ -1,0 +1,20 @@
+# Existing production Worker only. Prepare with `wrangler versions upload`;
+# activate the resulting version separately after human approval.
+# Never use this file with `wrangler deploy` or to create a new Worker/class.
+# No migrations/exports: version upload must not change the DO lifecycle.
+# Both existing SQLite namespaces and all dashboard vars/secrets are retained.
+name = "kaimono-baton-handwriting-import"
+main = "src/index.ts"
+compatibility_date = "2026-07-26"
+keep_vars = true
+
+[[durable_objects.bindings]]
+name = "PHOTO_OBJECTS"
+class_name = "PhotoObject"
+
+[[durable_objects.bindings]]
+name = "SHARED_REQUEST_OBJECTS"
+class_name = "SharedRequestObject"
+
+[observability]
+enabled = false

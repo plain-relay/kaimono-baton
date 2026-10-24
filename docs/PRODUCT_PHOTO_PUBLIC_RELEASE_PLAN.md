@@ -3,7 +3,7 @@
 - Task: 商品写真復旧・通常公開準備の継続。本人が公開を承認し、無料写真向け公開条件の見直しを明示許可。
 - Base: main `ea2582f6f4f14bedf98b9591ce281fbfff8aa654`。
 - Branch: `test/product-photo-staging`、見直し前head `7468f1c7b3a2e914e144e63fd80146c15e35b97a`。
-- 完全差分のRisk: High。今回の追加は公開判定の文書とAboutの写真説明。写真API、Secrets、料金、AIの操作権限は変更しない。
+- 完全差分のRisk: High。今回の追加は公開判定の文書、Aboutの写真説明、削除失敗後の再予約、本番version用設定の準備。Secrets、料金、AIの操作権限は変更しない。
 - 理由: 無料・停止可能な写真の初回公開に、有料βの販売/継続率/7日間の実績を一律要求していた。
   技術・privacy・安全停止の証拠と、有料商品の事業実績を分ける。
 
@@ -29,6 +29,20 @@ AGENTSの役割分離、自己merge禁止、ready化/Production/法的公開の�
 6. About以外のcode identityで既存実機検証と対応付ける。Aboutを含む新artifactが旧実機結果そのものだとは記載しない。merge後のmainとWorker version/Pages artifactも人間が対応付ける。
 
 本番flagはOFF。人間がPRと新条件を確認してmerge・別承認したProduction操作を行うまで公開しない。
+
+## 独立レビューP2への対応
+
+2625fbcの完全差分レビューで、About/公開票の無条件な14日物理削除の説明をP2と確認。
+初回アップロードからの閲覧期限と削除予定、障害/Free quotaによる遅延、バックアップを区別する。
+既存PhotoObjectだけで削除失敗を1時間後へ再予約し、再予約もwrite拒否なら例外を残してplatform retryを維持する。
+期限は延長しない。全write拒否でplatform retryも終わる場合は人間の削除復旧が必要な限界を明記する。
+unitの7回超失敗→回復と両write拒否→期限後GETでの削除、実workerd/SQLiteの失敗注入→実Alarm再予約/削除を検証。
+新サービス・class/migration・v5・保持期間を追加/変更しない。修正後の新exact rangeはfresh contextで再レビューする。
+本番の既存ソース/設定は公式Wrangler init --from-dash --no-delegate-c3で読み取り取得し、codeの既存両classを確認。
+生成設定にmigrationタグはなく、生成設定を履歴の代わりに機械コピーしない。
+本番専用configは既存class2つとkeep_varsだけを保持するversion upload用とし、dry-runをCIへ追加する。
+既存classのlifecycle変更が不要なコード更新のみを準備し、uploadとactivationは人間の別操作。
+wrangler deployへ置き換えたり、例のmigration/exportsへ移行したりしない。remoteがlifecycle変更を要求したら停止する。
 rollbackは写真flagをWorker/PagesでOFF、無料コアを確認、DO/保存データ/14日Alarmを保持。
 規則の見直しを戻す場合は文書のみを戻し、runtimeの起動修正を巻き戻さない。
 private ops、Secret値、写真・共有URL・利用者本文を取得しない。

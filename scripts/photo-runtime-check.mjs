@@ -108,8 +108,32 @@ try {
       export { default } from './worker/src/index'
       import { PhotoObject as BasePhotoObject } from './worker/src/photoObject'
       export class PhotoObject extends BasePhotoObject {
-        expireForTest() { this.ctx.storage.sql.exec('UPDATE photo SET expires_at = ?1', Date.now() - 1) }
+        expireForTest() { this.ctx.storage.sql.exec('UPDATE photo SET expires_at = ?1', Date.now() - 2000) }
         alarmSoonForTest() { return this.ctx.storage.setAlarm(Date.now() + 100) }
+        async failDeletionsForTest(count) { await this.ctx.storage.put('syntheticFailures', count) }
+        async deletionStateForTest() {
+          const tableExists = this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'photo'").toArray().length > 0
+          return { rowExists: tableExists && this.ctx.storage.sql.exec('SELECT singleton FROM photo').toArray().length > 0,
+            remaining: await this.ctx.storage.get('syntheticFailures'), alarm: await this.ctx.storage.getAlarm() }
+        }
+        deleteExpiredRowsForTest() {
+          this.ctx.storage.sql.exec('DELETE FROM photo WHERE expires_at <= unixepoch() * 1000')
+        }
+        async deletePhoto() {
+          const remaining = await this.ctx.storage.get('syntheticFailures')
+          if (remaining > 0) {
+            await this.ctx.storage.put('syntheticFailures', remaining - 1)
+            throw new Error('synthetic deletion unavailable')
+          }
+          return super.deletePhoto()
+        }
+        async alarm() {
+          // Only this test subclass shortens the production one-hour re-arm.
+          // Storage and the scheduler remain real; restore the clock on exit.
+          const realNow = Date.now
+          Date.now = () => realNow() - 60 * 60 * 1000 + 250
+          try { await super.alarm() } finally { Date.now = realNow }
+        }
       }
     ` }, bundle: true, write: false, format: 'esm', platform: 'browser',
     external: ['cloudflare:workers'],
@@ -142,6 +166,44 @@ try {
     } while (read.status !== 'missing' && Date.now() < deadline)
     assert.equal(read.status, 'missing')
     results.push({ case: 'scheduled-alarm-deletes-sqlite', passed: true })
+    currentCase = 'failed-deletion-rearm'
+    const retryObject = objects.getByName(photo().token)
+    await retryObject.savePhoto(input)
+    await retryObject.expireForTest()
+    currentCase = 'failed-deletion-fixture'
+    await retryObject.failDeletionsForTest(7)
+    currentCase = 'failed-deletion-initial-state'
+    assert.equal((await retryObject.deletionStateForTest()).remaining, 7)
+    currentCase = 'failed-deletion-arm'
+    await retryObject.alarmSoonForTest()
+    const retryDeadline = Date.now() + 8000
+    let sawRearmed = false
+    let sawSeventhFailure = false
+    let retryState
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      currentCase = 'failed-deletion-state'
+      retryState = await retryObject.deletionStateForTest()
+      if (retryState.rowExists && retryState.remaining < 7 && retryState.alarm !== null) sawRearmed = true
+      if (retryState.rowExists && retryState.remaining === 0) sawSeventhFailure = true
+    } while (retryState.rowExists && Date.now() < retryDeadline)
+    currentCase = 'deletion-rearm-observed'
+    assert.ok(sawRearmed)
+    currentCase = 'seventh-deletion-failure-observed'
+    assert.ok(sawSeventhFailure)
+    currentCase = 'deletion-rearm-completed'
+    assert.equal(retryState.rowExists, false)
+    assert.equal(retryState.alarm, null)
+    results.push({ case: 'seven-failed-deletions-rearm-and-recover', passed: true })
+    currentCase = 'manual-expired-sql-recovery'
+    const manualObject = objects.getByName(photo().token)
+    await manualObject.savePhoto(input)
+    await manualObject.deleteExpiredRowsForTest()
+    assert.equal((await manualObject.deletionStateForTest()).rowExists, true)
+    await manualObject.expireForTest()
+    await manualObject.deleteExpiredRowsForTest()
+    assert.equal((await manualObject.deletionStateForTest()).rowExists, false)
+    results.push({ case: 'manual-recovery-sql-only-deletes-expired-row', passed: true })
   } finally {
     await lifecycle.dispose()
   }

@@ -140,6 +140,8 @@ describe('home and about pages', () => {
 
     expect(container.textContent).toContain('商品写真（無料）')
     expect(container.textContent).toContain('14日間')
+    expect(container.textContent).toContain('初回アップロードから')
+    expect(container.textContent).toContain('削除が遅れる場合があります')
     expect(container.textContent).toContain('バックアップ')
     expect(container.textContent).toContain('EXIF')
     expect(container.textContent).toContain('転送された相手')
