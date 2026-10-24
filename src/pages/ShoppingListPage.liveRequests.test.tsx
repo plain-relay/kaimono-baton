@@ -182,6 +182,8 @@ describe('ShoppingListPage live request synchronization', () => {
     await click(button('1本をかごに入れる'))
     expect(storedProgress()['item-1']).toBe('inCart')
 
+    expect(container.querySelector('.shopping-item-card.is-compact')).not.toBeNull()
+
     const next = snapshot({ revision: 2, quantity: 2, memo: '低脂肪' })
     next.items.push({
       ...next.items[0],
@@ -208,6 +210,7 @@ describe('ShoppingListPage live request synchronization', () => {
     expect(container.textContent).toContain('追加されました')
     expect(container.textContent).toContain('卵')
     expect(container.querySelector('.live-request-change.is-strong')).not.toBeNull()
+    expect(container.querySelector('.shopping-item-card.is-compact')).toBeNull()
     expect(storedProgress()['item-1']).toBe('inCart')
   })
 

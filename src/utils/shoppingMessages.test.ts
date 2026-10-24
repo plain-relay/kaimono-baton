@@ -6,6 +6,7 @@ import {
   buildShoppingResultMessage,
   getUnavailableReasonLabel,
   isFreeQuestion,
+  CONSULTATION_TEMPLATES,
 } from './shoppingMessages'
 
 const createItem = (
@@ -40,6 +41,23 @@ describe('unavailable reason labels', () => {
 })
 
 describe('consultation messages', () => {
+  it.each(CONSULTATION_TEMPLATES)('builds $label with one question and no invented fallback', ({ note }) => {
+    const item = createItem('yogurt', 'ヨーグルト', 2, '個', 'プレーン・400g')
+    const issue = { reason: 'other' as const, note }
+    const individual = buildIndividualConsultationMessage(item, issue)
+    expect(individual).toContain('商品：ヨーグルト\n数量：2個\n条件：プレーン・400g')
+    expect(individual).toContain(note)
+    expect(individual).not.toContain('別の商品でよいですか？')
+    expect(individual.match(/[?？]/gu)).toHaveLength(1)
+    expect(buildBulkConsultationMessage([{ item, issue }])).toContain(note)
+  })
+
+  it('does not append a second question to a saved structured question', () => {
+    const message = buildIndividualConsultationMessage(createItem('milk', '牛乳', 1, '本'),
+      { reason: 'notFound', note: '売り場はどこですか？' })
+    expect(message).toContain('状況：商品が見つからない')
+    expect(message).not.toContain('別の商品でよいですか？')
+  })
   it('builds an individual message with a condition', () => {
     const item = createItem('apple', 'りんご', 2, '玉', '王林かフジ')
     expect(

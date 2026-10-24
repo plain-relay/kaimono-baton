@@ -208,6 +208,26 @@ describe('CreateRequestPage product photo sharing', () => {
     expect(sharedPayload().requestId).toMatch(/^v3-/)
   })
 
+  it('retains a selected photo while searching other products and clearing the search', async () => {
+    await renderPage()
+    const search = container.querySelector<HTMLInputElement>('.product-search input')!
+    const setSearch = async (value: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, value)
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    await setSearch('牛乳')
+    await selectMilkPhoto()
+    await setSearch('ヨーグルト')
+    expect(container.querySelector('img[alt="牛乳の参考写真プレビュー"]')).toBeNull()
+    expect(revokePreviewUrl).not.toHaveBeenCalled()
+    await setSearch('')
+    expect(container.querySelector('img[alt="牛乳の参考写真プレビュー"]')).not.toBeNull()
+    expect(increaseMilkButton().getAttribute('aria-label')).toContain('現在1本')
+    await click(button('確認へ'))
+    expect(container.querySelector('img')).not.toBeNull()
+  })
+
   it('discards only the current photo preview when starting the next list', async () => {
     await renderPage()
     await selectMilkPhoto()

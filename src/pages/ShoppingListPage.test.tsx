@@ -204,6 +204,97 @@ describe('ShoppingListPage buyer flow', () => {
     await selectReason(reason)
   }
 
+  it('compacts only a confirmed purchase, opens details, resets and restores compact status through Undo', async () => {
+    const { encoded, payload } = createRequest([{}, { quantity: 2, memo: '国産' }])
+    const [first, second] = payload.items
+    await renderRequest(encoded)
+    const trigger = container.querySelector<HTMLButtonElement>(`[aria-label="${first.productNameSnapshot}を1個かごに入れる"]`)!
+    trigger.focus()
+    const card = trigger.closest('article')!
+    await clickAndFlush(trigger)
+    const summary = card.querySelector<HTMLButtonElement>('.shopping-compact-summary')!
+    expect(card.classList.contains('is-compact')).toBe(true)
+    expect(card.querySelector('.shopping-item-details')?.hasAttribute('hidden')).toBe(true)
+    expect(document.activeElement).toBe(summary)
+    await clickAndFlush(summary)
+    expect(summary.getAttribute('aria-expanded')).toBe('true')
+    const reset = card.querySelector<HTMLButtonElement>('[aria-label$="を未購入に戻す"]')!
+    reset.focus()
+    await clickAndFlush(reset)
+    expect(card.classList.contains('is-compact')).toBe(false)
+    expect(readCheckedState(payload.requestId)[first.id]).toBe('pending')
+    expect(document.activeElement).toBe(card.querySelector('[aria-label$="かごに入れる"]'))
+    await clickAndFlush(button('元に戻す'))
+    expect(card.classList.contains('is-compact')).toBe(true)
+    expect(readCheckedState(payload.requestId)[first.id]).toBe('inCart')
+    await clickAndFlush(container.querySelector(`[aria-label="${second.productNameSnapshot}を2個かごに入れる"]`)!)
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(readCheckedState(payload.requestId)[second.id]).toBeUndefined()
+    expect(container.querySelectorAll('.shopping-item-card.is-compact')).toHaveLength(1)
+  })
+
+  it('keeps legacy inCart conditions and unresolved consultations expanded in place', async () => {
+    const { encoded, payload } = createRequest([{ memo: '国産' }, {}])
+    const [first, second] = payload.items
+    storeShoppingState(payload.requestId, { [first.id]: 'inCart', [second.id]: 'verified' }, {}, {
+      [second.id]: { itemId: second.id, reason: 'other', note: '合成質問？', status: 'queued' },
+    })
+    await renderRequest(encoded)
+    expect(container.querySelectorAll('.shopping-item-card.is-compact')).toHaveLength(0)
+    expect(button('購入時の条件を確認する')).toBeDefined()
+    expect(container.querySelectorAll('.shopping-item-card')[0].textContent).toContain(first.productNameSnapshot)
+    await clickAndFlush(button('相談を解決'))
+    expect(container.querySelectorAll('.shopping-item-card.is-compact')).toHaveLength(1)
+  })
+
+  it.each(['売り切れ', '別メーカーの商品ならある', 'サイズ違いならある', '商品が見つからない'])(
+    'prepares %s without sending or changing purchase status, and preserves cancel/edit/bulk share', async (label) => {
+      const share = vi.fn(async (_data: ShareData) => { throw new DOMException('cancel', 'AbortError') })
+      setNavigatorShare(share)
+      const { encoded, payload } = createRequest([{ quantity: 2, memo: '国産' }])
+      const item = payload.items[0]
+      await renderRequest(encoded)
+      await clickAndFlush(button('質問・買わない'))
+      await clickAndFlush(button(label))
+      const input = container.querySelector<HTMLInputElement>('[aria-label$="への質問・伝えたいこと"]')!
+      const templateText = input.value
+      expect(templateText).toContain('？')
+      expect(share).not.toHaveBeenCalled()
+      expect(readCheckedState(payload.requestId)[item.id]).toBeUndefined()
+      const preview = container.querySelector('.consultation-message-preview')!.textContent!
+      expect(preview).toContain('数量：2個')
+      expect(preview).toContain('条件：国産')
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, templateText + ' 追記')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      await clickAndFlush(button('売り切れ'))
+      expect(input.value).toBe(templateText + ' 追記')
+      await clickAndFlush(button('入力を残す'))
+      await clickAndFlush(button('LINEで質問する'))
+      expect(container.querySelector<HTMLInputElement>('[aria-label$="への質問・伝えたいこと"]')?.value).toBe(templateText + ' 追記')
+      expect(readConsultations(payload.requestId)[item.id].status).toBe('queued')
+      expect(readCheckedState(payload.requestId)[item.id]).toBeUndefined()
+      await clickAndFlush(button('まとめ相談に追加'))
+      await remountRequest(encoded)
+      expect(container.textContent).toContain(templateText + ' 追記')
+      expect(readConsultations(payload.requestId)[item.id].reason).toBe('other')
+    },
+  )
+
+  it('replaces an existing question only after an explicit template confirmation', async () => {
+    const { encoded } = createRequest()
+    await renderRequest(encoded)
+    await clickAndFlush(button('質問・買わない'))
+    await clickAndFlush(button('売り切れ'))
+    const input = container.querySelector<HTMLInputElement>('[aria-label$="への質問・伝えたいこと"]')!
+    const previous = input.value
+    await clickAndFlush(button('商品が見つからない'))
+    expect(input.value).toBe(previous)
+    await clickAndFlush(button('定型文に置き換える'))
+    expect(input.value).toContain('売り場や商品の特徴')
+  })
+
   it('shares a question without a reason, restores it, and keeps checkout unresolved until explicitly resolved', async () => {
     const share = vi.fn(async (_data: ShareData) => undefined)
     setNavigatorShare(share)
