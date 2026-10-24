@@ -168,6 +168,38 @@ describe('PhotoObject', () => {
     expect(storage.deleteAlarm).not.toHaveBeenCalled()
   })
 
+  it('re-arms failed alarm deletion beyond the platform automatic retry count', async () => {
+    const { object, storage } = createObject()
+    await object.savePhoto(saveInput())
+    storage.deleteAllError = new Error('synthetic deletion unavailable')
+
+    for (let attempt = 0; attempt < 7; attempt++) {
+      storage.alarmTime = undefined
+      const before = Date.now()
+      await expect(object.alarm()).resolves.toBeUndefined()
+      expect(storage.alarmTime).toBeGreaterThanOrEqual(before + 60 * 60 * 1000)
+      expect(storage.row?.expires_at).toBe(expiresAt)
+    }
+    storage.deleteAllError = undefined
+    await object.alarm()
+    expect(storage.row).toBeUndefined()
+    expect(storage.alarmTime).toBeUndefined()
+  })
+
+  it('throws for platform retry when deletion and re-arming both fail, then recovers on expired access', async () => {
+    const { object, storage } = createObject()
+    await object.savePhoto(saveInput())
+    storage.deleteAllError = new Error('synthetic storage quota failure')
+    storage.setAlarm.mockRejectedValueOnce(new Error('synthetic alarm quota failure'))
+
+    await expect(object.alarm()).rejects.toThrow('synthetic alarm quota failure')
+    await expect(object.getPhoto(expiresAt)).rejects.toThrow('synthetic storage quota failure')
+    expect(storage.row?.expires_at).toBe(expiresAt)
+    storage.deleteAllError = undefined
+    await expect(object.getPhoto(expiresAt + DAY_MS)).resolves.toEqual({ status: 'expired' })
+    expect(storage.row).toBeUndefined()
+  })
+
   it('rejects storage input without the fixed retention contract', async () => {
     const { object, storage } = createObject()
 

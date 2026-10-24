@@ -38,6 +38,18 @@ jobs:
       - name: Worker bundle check
         run: npm run check:worker-bundle
 
+      - name: Existing production Worker version bundle check (no upload or deploy)
+        run: npx wrangler versions upload --config worker/wrangler.photo-release.toml --dry-run --outdir .wrangler/photo-release-dry-run
+
+      - name: Photo workerd and SQLite integration
+        run: node scripts/photo-runtime-check.mjs
+
+      - name: Independent photo staging runtime and asset authentication
+        run: node scripts/photo-staging-runtime-check.mjs
+
+      - name: Independent photo staging bundle check (no deploy)
+        run: npx wrangler deploy --config worker/wrangler.photo-staging.toml --dry-run --outdir .wrangler/photo-staging-dry-run
+
       - name: Coverage
         run: npm run test:coverage
 

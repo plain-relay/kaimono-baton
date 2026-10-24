@@ -2,6 +2,9 @@
 
 Status: accepted for implementation, production disabled
 
+2026-10-23の再現結果、workerd起動修正、0〜3枚のブラウザ/SQLite統合検証、最新Cloudflare仕様と人間向け公開手順は
+[商品写真復旧・公開判定記録](PRODUCT_PHOTO_RECOVERY.md)を参照してください。実機・実Cloudflare設定は未検証で、公開保留です。
+
 この文書は商品参考写真について、ブラウザ前処理、固定依頼v4で参照する写真API、SQLite-backed Durable Objectの保存・期限・削除を定義します。現在の通常公開ではフロント`VITE_PRODUCT_PHOTOS_ENABLED=false`、Worker`PHOTO_API_ENABLED=false`です。本番Workerへのbinding追加、migration適用、flag有効化は別途承認があるまで行いません。
 
 ## 決定

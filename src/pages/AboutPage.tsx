@@ -1,13 +1,16 @@
 import { getLiveRequestConfig } from '../features/liveRequests/config'
+import { getProductPhotoConfig } from '../features/productPhotos/config'
 
 type AboutPageProps = {
   onBackHome: () => void
   liveRequestsEnabled?: boolean
+  productPhotosEnabled?: boolean
 }
 
 export function AboutPage({
   onBackHome,
   liveRequestsEnabled = getLiveRequestConfig().enabled,
+  productPhotosEnabled = getProductPhotoConfig().enabled,
 }: AboutPageProps) {
   return (
     <main className="page">
@@ -44,6 +47,27 @@ export function AboutPage({
         </p>
       </section>
 
+      {productPhotosEnabled ? (
+        <section className="info-card about-card">
+          <h2>商品写真（無料）</h2>
+          <p>商品写真は任意です。写真なしでも通常の依頼を共有できます。</p>
+          <p>
+            1商品1枚、1依頼最大3枚。写真は初回アップロードから14日間閲覧でき、14日後に自動削除する予定です。
+            障害や無料枠の制限により、削除が遅れる場合があります。
+            保管基盤のバックアップには、通常の閲覧とは別の保持期間があります。
+          </p>
+          <p>
+            写真は圧縮し、元画像のEXIFや位置情報を引き継ぎません。
+            画像内の顔や住所などは除去できないため、個人情報を写さないでください。
+          </p>
+          <p>共有URLが転送された相手も、ログインなしで写真を閲覧できます。</p>
+          <p>写真を取得できない場合も、依頼本文と購入操作を利用できます。</p>
+          <p>
+            Android Chromeで写真の選択・共有・閲覧を確認しています。iPhone Safariは未検証です。
+          </p>
+        </section>
+      ) : null}
+
       <section className="info-card about-card">
         <h2>安全上の注意</h2>
         <p>
@@ -54,10 +78,14 @@ export function AboutPage({
       <section className="info-card about-card">
         <h2>今回の外部価値検証</h2>
         <p>
-          固定依頼、URL共有、買い物の進捗などのStable Free Coreだけが対象です。
+          {productPhotosEnabled
+            ? '固定依頼、URL共有、買い物の進捗に加えて、任意の商品写真を無料で利用できます。'
+            : '固定依頼、URL共有、買い物の進捗などのStable Free Coreだけが対象です。'}
         </p>
         <p>
-          写真、更新可能な依頼（v5 / live requests）、手書き取り込みなどのサーバーを使う実験的機能は提供対象外です。
+          {productPhotosEnabled
+            ? '今回の商品写真の公開は、更新可能な依頼（v5 / live requests）や手書き取り込みの提供範囲を変更するものではありません。'
+            : '写真、更新可能な依頼（v5 / live requests）、手書き取り込みなどのサーバーを使う実験的機能は提供対象外です。'}
         </p>
       </section>
 

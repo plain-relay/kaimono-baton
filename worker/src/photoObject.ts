@@ -112,6 +112,15 @@ export class PhotoObject extends DurableObject<WorkerEnv> {
   }
 
   async alarm(): Promise<void> {
-    await this.ctx.storage.deleteAll()
+    try {
+      await this.deletePhoto()
+    } catch {
+      // A new alarm is independent of the platform's bounded exception retries.
+      // Keep the original expires_at: retrying deletion never renews access.
+      // If storage also refuses setAlarm (for example during quota exhaustion),
+      // let that error escape so the platform still retries. After recovery,
+      // expired getPhoto() also retries deletion without returning the image.
+      await this.ctx.storage.setAlarm(Date.now() + 60 * 60 * 1000)
+    }
   }
 }
