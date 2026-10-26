@@ -1,3 +1,5 @@
+import { getRecoveryBaseUrl, isNativeApp } from '../platform/runtime'
+import { exportNativeCatalogJson } from '../platform/nativeShare'
 import { useState } from 'react'
 import type { HouseholdCatalog } from '../types/householdCatalog'
 import {
@@ -20,10 +22,6 @@ type PendingBackupConfirmation = {
 } | null
 
 const RECOVERY_SHARE_TITLE = '買いものバトンの商品リスト復旧用リンク'
-
-function getRecoveryBaseUrl(): string {
-  return window.location.href.split('#', 1)[0]
-}
 
 export function downloadCatalogRecoveryJson(
   bundle: Pick<CatalogRecoveryBundle, 'fileName' | 'json'>,
@@ -68,14 +66,25 @@ export function CatalogBackupStatus({
         catalog,
       )
       if (!bundle.isWithinUrlLimit) {
-        if (!downloadCatalogRecoveryJson(bundle)) {
+        const result = isNativeApp()
+          ? await exportNativeCatalogJson(bundle)
+          : downloadCatalogRecoveryJson(bundle) ? 'shared' : 'failed'
+        if (result === 'cancelled') {
+          setNotice('共有をキャンセルしました。商品リストは端末内に保存されています。')
+          return
+        }
+        if (result !== 'shared') {
           setNotice(
-            '復旧用JSONファイルを書き出せませんでした。ブラウザのダウンロード設定を確認してください。',
+            isNativeApp()
+              ? '復旧用JSONファイルを共有できませんでした。空き容量や共有設定を確認してください。'
+              : '復旧用JSONファイルを書き出せませんでした。ブラウザのダウンロード設定を確認してください。',
           )
           return
         }
         setNotice(
-          '復旧リンクが2,200文字を超えるため、復旧用JSONファイルを書き出しました。',
+          isNativeApp()
+            ? '復旧リンクが2,200文字を超えるため、復旧用JSONファイルの保存画面を開きました。保存先でファイルを確認してください。'
+            : '復旧リンクが2,200文字を超えるため、復旧用JSONファイルを書き出しました。',
         )
         setPendingConfirmation({
           fingerprint: bundle.fingerprint,

@@ -1,3 +1,4 @@
+import { getPublicCurrentUrl } from '../platform/runtime'
 import {
   useCallback,
   useEffect,
@@ -151,7 +152,7 @@ export function ShoppingListPage({
   })
   const nativeShareAvailable = isNativeShareAvailable()
   const externalBrowserUrl = useMemo(
-    () => addLineExternalBrowserHint(window.location.href),
+    () => addLineExternalBrowserHint(getPublicCurrentUrl()),
     [encodedPayload, liveRequestToken, payloadCodec],
   )
   const { checkedState, itemIssues, cartOrder } = shoppingState

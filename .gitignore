@@ -15,3 +15,12 @@ worker/wrangler.toml
 .wrangler
 .manual-test
 .photo-staging
+
+# Native build products and signing material
+dist-native
+artifacts
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.ipa

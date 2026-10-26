@@ -1,3 +1,4 @@
+import { isNativeApp } from '../../platform/runtime'
 export type HandwritingImportConfig = {
   enabled: boolean
   diagnosticsEnabled: boolean
@@ -86,6 +87,7 @@ export function resolveHandwritingImportConfig(
 }
 
 export function getHandwritingImportConfig(): HandwritingImportConfig {
+  if (isNativeApp()) return { enabled: false, diagnosticsEnabled: false, endpoint: '', turnstileSiteKey: '' }
   return resolveHandwritingImportConfig(
     import.meta.env,
     window.location.href,

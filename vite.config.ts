@@ -7,7 +7,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
   return {
-    base: env.BASE_PATH || '/',
+    base: mode === 'native' ? '/' : env.BASE_PATH || '/',
+    build: { outDir: mode === 'native' ? 'dist-native' : 'dist' },
     resolve: {
       alias: {
         'cloudflare:workers': fileURLToPath(

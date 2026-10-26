@@ -1,0 +1,18 @@
+/* Native-only adjustments; the Web layout keeps its existing rules. */
+.native-app .app-shell {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.native-link-import {
+  margin: 0.85rem;
+  padding: 0.8rem;
+  border: 1px solid #b9cbc4;
+  border-radius: 8px;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.native-link-import summary { cursor: pointer; min-height: 44px; padding: 0.5rem 0; }
+.native-link-import p { font-size: 0.9rem; }
+
+.native-app input, .native-app textarea, .native-app select { font-size: max(1rem, 16px); }

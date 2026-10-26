@@ -1,3 +1,4 @@
+import { isNativeApp } from '../../platform/runtime'
 export type LiveRequestConfig = {
   enabled: boolean
   endpoint: string
@@ -52,6 +53,7 @@ export function resolveLiveRequestConfig(
 export function getLiveRequestConfig(
   validationSessionToken?: string,
 ): LiveRequestConfig {
+  if (isNativeApp()) return { enabled: false, endpoint: '', turnstileSiteKey: '' }
   return resolveLiveRequestConfig(import.meta.env, validationSessionToken)
 }
 import { isManualValidationSessionToken } from '../manualValidation/session'
