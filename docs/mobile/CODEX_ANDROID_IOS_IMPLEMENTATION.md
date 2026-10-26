@@ -49,7 +49,7 @@ PoCでCapacitorが不適合なら、技術的な事実、最小代替案（必�
 
 ### 3.1 共通コードとディレクトリ
 
-- Capacitorが適合する場合、同一React/Viteソース、capacitior構成ファイル（実際の正式名を採用）、android/、ios/ を保守しやすい構成とする。両OSでロジックを複製しない。
+- Capacitorが適合する場合、同一React/Viteソース、Capacitor構成ファイル（実際の正式名を採用）、android/、ios/ を保守しやすい構成とする。両OSでロジックを複製しない。
 - Web専用の共有URL生成、共有シート、外部リンク、受信リンクを共通インターフェースの薄いアダプターに抽出する。Webブラウザ時は**既存挙動に一切回帰を起こさない**。元のテストfixturesを温存。
 - ビルド環境の切替で既存WebのVITE_* flags、BASE_PATH、端末保存キー、JSON形式、URL codecを無断変更しない。
 - リリース識別子（Web資産版、Android versionCode/versionName、iOS CFBundleVersion/CFBundleShortVersionString）と再現方法を文書化する。バージョンとソースcommitの対応を報告する。
