@@ -22,7 +22,8 @@ TESTS = (
 )
 STAGES = {"environment", "resolve", "build", "artifact", "simulator", "tests", "complete"}
 UI_STAGES = {"home", "create", "draft_selected", "import_form", "fixed_open", "progress",
-             "relaunch", "resume", "draft_restore", "review", "share_sheet", "share_cancel", "cancelled_restore"}
+             "relaunch", "resume", "draft_restore", "review", "share_sheet", "share_cancel", "cancelled_restore",
+             "share_plugin_failure", "share_close_missing"}
 
 
 def command(args, name, timeout=900):

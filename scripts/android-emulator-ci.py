@@ -18,6 +18,7 @@ CASES = (
     "catalogJsonExportUsesPrivateCacheAndRequiresConfirmation",
 )
 FAILURE_STAGES = {
+    "stored purchase progress did not complete": "stored_progress",
     "resume button did not complete": "resume_button",
     "restored progress did not complete": "restored_progress",
     "Android back to home did not complete": "android_back_home",

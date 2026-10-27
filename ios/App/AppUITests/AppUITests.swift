@@ -6,6 +6,7 @@ final class AppUITests: XCTestCase {
     private enum Stage: String {
         case home, create, draft_selected, import_form, fixed_open, progress
         case relaunch, resume, draft_restore, review, share_sheet, share_cancel, cancelled_restore
+        case share_plugin_failure, share_close_missing
     }
     private func stage(_ value: Stage) {
         // This fixed enum is the only UI trace exported by the CI result producer.
@@ -80,8 +81,10 @@ final class AppUITests: XCTestCase {
         reveal(cart)
         stage(.progress)
         cart.tap()
-        let reset = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "未購入に戻す")).firstMatch
-        XCTAssertTrue(reset.waitForExistence(timeout: 10), "progress saved")
+        // Purchased, condition-free cards intentionally collapse their action buttons.
+        // Assert the visible purchased summary, not a hidden reset control in the DOM.
+        let purchased = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "購入済みの詳細を")).firstMatch
+        XCTAssertTrue(purchased.waitForExistence(timeout: 10), "progress saved")
         stage(.relaunch)
         app.terminate()
         app.launch()
@@ -90,7 +93,7 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(resume.waitForExistence(timeout: 10), "saved fixed route")
         stage(.resume)
         resume.tap()
-        XCTAssertTrue(reset.waitForExistence(timeout: 20), "progress survived process restart")
+        XCTAssertTrue(purchased.waitForExistence(timeout: 20), "progress survived process restart")
     }
 
     func testDraftSurvivesRestart() {
@@ -115,10 +118,27 @@ final class AppUITests: XCTestCase {
         reveal(share)
         stage(.share_sheet)
         share.tap()
-        let close = app.buttons["Close"].firstMatch
-        XCTAssertTrue(close.waitForExistence(timeout: 20), "native activity sheet")
+        let closeQuery = NSPredicate(format: "label IN %@ OR identifier IN %@",
+            ["Close", "Cancel", "閉じる", "キャンセル"], ["Close", "Cancel", "CloseButton"])
+        let close = app.buttons.matching(closeQuery).firstMatch
+        let systemClose = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons.matching(closeQuery).firstMatch
+        let rejected = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "共有またはコピーができませんでした")).firstMatch
+        let sheetReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            close.exists || systemClose.exists || rejected.exists
+        }, object: nil)
+        _ = XCTWaiter.wait(for: [sheetReady], timeout: 30)
+        if rejected.exists {
+            stage(.share_plugin_failure)
+            XCTFail("native share rejected")
+            return
+        }
+        guard close.exists || systemClose.exists else {
+            stage(.share_close_missing)
+            XCTFail("native activity close control missing")
+            return
+        }
         stage(.share_cancel)
-        close.tap()
+        if close.exists { close.tap() } else { systemClose.tap() }
         let cancelled = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "共有をキャンセルしました")).firstMatch
         XCTAssertTrue(cancelled.waitForExistence(timeout: 20), "OS cancellation returned to application")
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "依頼文をコピーしました")).firstMatch.exists, "no clipboard fallback")

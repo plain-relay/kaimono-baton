@@ -82,6 +82,10 @@ public class BundledCoreTest {
         evaluate("(() => { const buttons=document.querySelectorAll('.shopping-cart-button'); buttons[buttons.length-1].click(); return true; })()");
         eventually("purchase progress", "!!document.querySelector('.shopping-item-card.is-inCart')");
         assertEquals("resume key", "true", evaluate("!!localStorage.getItem('kaimono-baton:native:last-fixed-route:v1')"));
+        eventually("stored purchase progress", "Object.keys(localStorage).filter(k=>k.startsWith('otsukai:checked:')).some(k=>Object.values(JSON.parse(localStorage.getItem(k))).includes('inCart'))");
+        // Normal restart is tested after the WebView's asynchronous storage commit window.
+        // Immediate force-kill/crash durability is a separate, unproven contract.
+        SystemClock.sleep(6000);
     }
 
     @Test

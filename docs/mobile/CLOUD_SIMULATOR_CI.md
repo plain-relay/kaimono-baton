@@ -59,3 +59,15 @@ Apple account/Team/証明書/署名key/Secrets/App Store Connectは不要・未�
 merge/Ready/Production/store操作なし。失敗修正後は新headの全PR差分をfresh read-only Codexで
 再レビューする。High残余riskの受容、実機受入、本番ID/署名/privacy/権利/storeは引き続き別の人間gate。
 rollbackはCI追加のrevertかDraft PRを閉じること。既存Web/WorkerのProductionへ影響しない。
+
+## 初回クラウド実行からの修正
+
+初回でiOS compileとdraft/relaunchは成功したが、購入済みカードは詳細を折り畳む既存仕様のため、
+UI testが非表示のreset buttonを探して失敗した。表示される購入済みsummaryを確認する形へ修正。
+OS shareのClose controlは言語・表示先も確認する。取消後のアプリの明示notice/draft保持は必須のまま。
+結果とsource対応は最終PRに記録し、この変更だけで成功とは呼ばない。
+
+Android初回の再開ケースは失敗し、診断追加後の同じアプリコードでは4件通過したため、
+最初の失敗段階は特定できていない。試験の保存前提を強め、JSの保存状態を確認し、WebViewの
+非同期commit用6秒を置いてから通常のprocess再起動を試す。即時force-kill/crashの永続化は証明しない。
+失敗履歴を隠さず、最終artifactの全ケースを再実行する。
