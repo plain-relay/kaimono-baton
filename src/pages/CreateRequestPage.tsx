@@ -1,3 +1,4 @@
+import { getRequestBaseUrl } from '../platform/runtime'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CreateRequestBottomActions } from '../components/CreateRequestBottomActions'
 import { CustomItemsSection } from '../components/CustomItemsSection'
@@ -142,7 +143,7 @@ export function CreateRequestPage({
     photoConfig.validationSessionToken ?? liveConfig.validationSessionToken
   const [requestKey, setRequestKey] = useState(createRequestKey)
   const requestBaseUrl = useMemo(
-    () => `${window.location.origin}${window.location.pathname}`,
+    () => getRequestBaseUrl(),
     [],
   )
   const budgetContext = useMemo(

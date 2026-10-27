@@ -1,3 +1,4 @@
+import { isNativeApp } from '../platform/runtime'
 export type NativeShareResult = 'shared' | 'copied' | 'cancelled' | 'failed'
 
 export type NativeShareInput = {
@@ -22,7 +23,7 @@ export function isShareCancellation(error: unknown): boolean {
 export function isNativeShareAvailable(
   share: unknown = typeof navigator === 'undefined' ? undefined : navigator.share,
 ): boolean {
-  return typeof share === 'function'
+  return isNativeApp() || typeof share === 'function'
 }
 
 function getBrowserDependencies(): NativeShareDependencies {
@@ -44,8 +45,17 @@ function getBrowserDependencies(): NativeShareDependencies {
 
 export async function shareText(
   input: NativeShareInput,
-  dependencies: NativeShareDependencies = getBrowserDependencies(),
+  dependencies?: NativeShareDependencies,
 ): Promise<NativeShareResult> {
+  if (!dependencies && isNativeApp()) {
+    try {
+      const { shareNativeText } = await import('../platform/nativeShare')
+      return await shareNativeText(input)
+    } catch {
+      return 'failed'
+    }
+  }
+  dependencies ??= getBrowserDependencies()
   if (dependencies.share) {
     try {
       await dependencies.share({ title: input.title, text: input.text })

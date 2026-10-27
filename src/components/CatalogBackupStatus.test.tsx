@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 
+import { Capacitor } from '@capacitor/core'
+import * as nativeSharing from '../platform/nativeShare'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -215,4 +217,24 @@ describe('CatalogBackupStatus', () => {
     await click(button('保存した'))
     expect(onConfirmBackup).toHaveBeenCalledTimes(1)
   })
+  it.each(['shared', 'cancelled', 'failed'] as const)('native JSON export: %s never confirms a backup automatically', async (result) => {
+    vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
+    const exported = vi.spyOn(nativeSharing, 'exportNativeCatalogJson').mockResolvedValue(result)
+    const onConfirmBackup = vi.fn().mockReturnValue(true)
+    await act(async () => root.render(
+      <CatalogBackupStatus catalog={createOversizedCatalog()} backupStatus="unbacked" onConfirmBackup={onConfirmBackup} />,
+    ))
+    await click(button('復旧リンクを保存'))
+    expect(exported).toHaveBeenCalledOnce()
+    expect(onConfirmBackup).not.toHaveBeenCalled()
+    if (result === 'shared') {
+      expect(container.textContent).toContain('保存先でファイルを確認')
+      await click(button('保存した'))
+      expect(onConfirmBackup).toHaveBeenCalledOnce()
+    } else {
+      expect(container.textContent).not.toContain('安全な場所へ保存しましたか')
+      expect(container.textContent).toContain(result === 'cancelled' ? 'キャンセルしました' : '共有できませんでした')
+    }
+  })
+
 })

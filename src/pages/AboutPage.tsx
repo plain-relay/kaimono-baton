@@ -1,3 +1,4 @@
+import { isNativeApp } from '../platform/runtime'
 import { getLiveRequestConfig } from '../features/liveRequests/config'
 import { getProductPhotoConfig } from '../features/productPhotos/config'
 
@@ -23,6 +24,16 @@ export function AboutPage({
           <h1>このアプリについて</h1>
         </div>
       </section>
+
+      {isNativeApp() && (
+        <section className="info-card about-card">
+          <h2>アプリ内の保存と引き継ぎ</h2>
+          <p>Safari・Chrome・PWAと、このアプリの保存領域は別です。商品リストと購入進捗は自動同期・自動移行されません。</p>
+          <p>商品リストは復旧リンクを貼り付けるか、商品リスト画面で復旧用JSONを選んで取り込めます。購入進捗は自動移行しません。</p>
+          <p>アプリの削除やデータ消去で保存内容を失う場合があります。復旧リンクやJSONを保存先で確認してから「保存した」を押してください。</p>
+          <p>写真・更新可能な依頼・手書き取り込みは、このアプリ版では利用できません。</p>
+        </section>
+      )}
 
       <section className="info-card about-card">
         <h2>試験公開について</h2>

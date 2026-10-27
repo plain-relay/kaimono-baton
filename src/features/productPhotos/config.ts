@@ -1,3 +1,4 @@
+import { isNativeApp } from '../../platform/runtime'
 export type ProductPhotoConfig = {
   enabled: boolean
   endpoint: string
@@ -52,6 +53,7 @@ export function resolveProductPhotoConfig(
 export function getProductPhotoConfig(
   validationSessionToken?: string,
 ): ProductPhotoConfig {
+  if (isNativeApp()) return { enabled: false, endpoint: '', turnstileSiteKey: '' }
   return resolveProductPhotoConfig(import.meta.env, validationSessionToken)
 }
 import { isManualValidationSessionToken } from '../manualValidation/session'

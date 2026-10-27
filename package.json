@@ -19,15 +19,27 @@
     "build": "tsc -b && npm run typecheck:worker && vite build",
     "preview": "vite preview",
     "worker:dev": "wrangler dev --config worker/wrangler.toml",
-    "worker:deploy": "wrangler deploy --config worker/wrangler.toml"
+    "worker:deploy": "wrangler deploy --config worker/wrangler.toml",
+    "build:native": "tsc -b && node scripts/build-native.mjs",
+    "sync:native": "npm run build:native && cap sync",
+    "android:debug": "npm run sync:native && cd android && ./gradlew assembleDebug",
+    "ios:open": "cap open ios"
   },
   "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/browser": "8.0.5",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/ios": "8.5.3",
+    "@capacitor/share": "8.0.3",
     "@google/genai": "2.13.0",
     "lz-string": "^1.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.3",
     "@cloudflare/workers-types": "5.20260722.1",
     "@types/node": "^22.7.4",
     "@types/react": "^18.3.3",
