@@ -6,6 +6,10 @@ Branch: `feat/native-android-ios-20261026`。exact head / PR / CI / artifactは�
 
 これは**実装済み範囲と未検証範囲の記録**。署名・配布・実機受入・審査完了の主張ではない。
 
+追加のcloud macOS/Android CIは [CLOUD_SIMULATOR_CI.md](CLOUD_SIMULATOR_CI.md) 参照。
+以下は初回Linux/TCG検証の記録。追加runで変わるiOS build/SimulatorとAndroid再検証の結果は
+最終PR本文・各exact-source Actions summaryで区別し、実機未検証を維持する。
+
 ## 環境
 
 Linux x86_64、Node 22.23.4 / npm 10.9.9、JDK 21、Android SDK 36。

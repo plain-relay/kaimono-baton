@@ -81,3 +81,28 @@ androidTest依存を使う計測テストを追加し、実WebViewのDOMとnativ
 WebView debuggingは変更しない。明示的な `syntheticDevice=true` とemulator hardwareを
 両方確認した場合だけ実行し、試験用storageだけを使用する。OS Picker / 日本語IME / 実機の
 未検証を、このテストの成功で代替しない。artifact/logはboolean結果と版情報に限定する。
+
+## クラウドmacOS検証（2026-10-27 UTC、Owner明示依頼）
+
+開始head `5248891a50789f41111549143632ba73da7d6a14`、baseは上記mainと一致、clean。
+同じ専用branch / Draft PR #30を維持する。今回の依頼により標準無料macOS Actionsの追加・
+実行はscope内。全PR差分のriskは引き続きHigh。既存本番workflowは変更しない。
+
+変更予定は専用PR workflow、署名不要のSimulator検証script、Xcode UI test target/shared
+scheme、合成fixture、OS別検証文書。Capacitor 8.5.3 / SwiftPM / application sourceの契約は維持。
+公開repositoryの標準 `macos-15` と明示的なXcode 26.3を使い、Node22.23.4でnpm ci/sync後、
+CODE_SIGNING_ALLOWED=NOでSimulator向けbuild/testする。larger/self-hosted runnerを使わず、
+private repositoryではjobを起動しない。timeout/concurrency/短期artifact保持で実行量を限定。
+
+新規の使い捨てSimulator上だけでXCUITestを実施し、同梱home、固定依頼の受付・購入進捗、
+terminate/relaunch、draft保存、実OS共有sheetの取消を試す。失敗/skip/未実施をPASSにしない。
+app本体への検証用JS bridgeや起動hookは追加しない。生成画面・URL・入力を含む生のUI log /
+xcresult / screenshot / Simulator data containerはuploadしない。決定論的な固定test名と結果、
+tool version、source SHA、build metadata、成果物checksumだけをsummaryへ出力する。
+成果物は署名不要のSimulator .app（IPA/配布用archiveではない）。Secrets/証明書/Apple account不要。
+
+Web/Worker全必須checkとAndroid app/test buildを再実行し、変更後headの全差分をfresh
+read-only Codex contextで独立レビュー。iPhone/iPad実機・LINE受信・Picker・IME/a11y等は別gate。
+費用根拠: GitHub公式の公開repo + standard runner無料条件とactions/runner-imagesの
+macos-15-arm64 image/Xcode一覧を確認。billing/Secrets/外部設定は変更しない。
+rollbackはこのCI追加のrevertまたはDraftを閉じること。merge/Ready/Production/storeは実行しない。

@@ -5,6 +5,10 @@ Capacitor 8.5.3 / Swift Package Manager構成。**今回のLinux環境にはMac/
 iOS build・Simulator起動・iPhone/iPad実機検証は未実施**。
 静的検査とasset syncはcompilationの代替にならない。
 
+2026-10-27の追加依頼で、Macを所有せず標準macOS Actionsから署名不要buildとSimulator検証を
+実行する構成を追加した。[cloud CI手順](CLOUD_SIMULATOR_CI.md)を参照。最新runの実測結果は
+PR本文/Actions artifactのsummaryを正とし、上記の初回Linux未実施記録と区別する。
+
 ## Macでの署名不要Simulator build
 
 [Capacitor公式](https://capacitorjs.com/docs/ios)に従い **Xcode 26.0以上 / iOS 15以上**、
