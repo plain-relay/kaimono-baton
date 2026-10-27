@@ -1,9 +1,12 @@
-import { Capacitor } from '@capacitor/core'
+import type { CapacitorGlobal } from '@capacitor/core'
 
 export const PUBLIC_WEB_BASE = 'https://plain-relay.github.io/kaimono-baton/'
 
 export function isNativeApp(): boolean {
-  return Capacitor.isNativePlatform()
+  // Capacitor 8 injects this API at document start on Android and iOS.
+  // Keep the browser entry free of plugin registration code.
+  const runtime = (globalThis as typeof globalThis & { Capacitor?: Partial<CapacitorGlobal> }).Capacitor
+  return typeof runtime?.isNativePlatform === 'function' && runtime.isNativePlatform() === true
 }
 
 // Never derive a native outgoing URL from a WebView origin.

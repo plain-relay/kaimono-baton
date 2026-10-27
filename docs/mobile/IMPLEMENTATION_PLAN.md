@@ -60,3 +60,24 @@ private ops、Secrets、利用者データ、実共有URL、写真は取得し�
 ユーザー自身がJSON/復旧リンクを保存する（削除によりローカルデータが消える可能性）。
 merge、Ready化、auto-merge、Production、ストア提出、配布用署名、DNS/association、
 Secrets/Variables変更、利用者data操作は実行しない。これらが必要なら手順のみ残す。
+
+## 継続検証（2026-10-26 UTC）
+
+Ownerの「続けてください」により、同じbranch / Draft PR #30で未完了の検証を継続する。
+Ownerは利用可能なMacがないと回答。iOSのXcode compilation / 実機は未実施のまま明示する。
+
+- ハードウェア仮想化なしのAndroid 16起動が未完了のため、Android 11/API30の合成環境でも
+  同一APKのinstall/同梱起動/offline/共有/永続化/JSONを検証する。target SDK 36は下げない。
+- 同じlocked dependenciesでbaseのWeb entryをbuildし、gzip sizeを比較したところ、
+  base 123,352 bytesに対して初回head 129,227 bytes。native pluginの初期読み込みを
+  Webから分離し、nativeのときだけ動的importする。Web Share/clipboardの既存契約を維持。
+- focused tests / 必須全check / CIを実施し、新headに対して新規read-only Codex contextで
+  完全差分を再レビュー。旧headレビューを新headへ流用しない。
+- 成果物のsource metadata / checksum、OS別実績、未検証項目を最終PR本文・検証記録へ更新する。
+
+Android 11ではboot完了とAPK install / Activity起動まで到達したが、TCGの遅さでSystem UIの
+ANRダイアログが発生した。UI Automatorのidle待ちによる不安定さを避けるため、既存の
+androidTest依存を使う計測テストを追加し、実WebViewのDOMとnative pluginを検証する。
+WebView debuggingは変更しない。明示的な `syntheticDevice=true` とemulator hardwareを
+両方確認した場合だけ実行し、試験用storageだけを使用する。OS Picker / 日本語IME / 実機の
+未検証を、このテストの成功で代替しない。artifact/logはboolean結果と版情報に限定する。

@@ -14,7 +14,7 @@ AndroidだけTWAにするとiOSとの二重保守になり、remote専用WebView
 小規模検証では公式CLIで両プロジェクトを生成し、同梱資産の同期・型チェック、既存route
 fixtureとnative境界testを確認した。Android WebViewとiOS WKWebViewの実機PoCは
 別の受入gateであり、生成・JSテストだけで起動検証済みとはしない。
-実測の更新先は [VALIDATION.md](VALIDATION.md)。iOSはMac/Xcodeがなくruntime未証明。
+実測の更新先は [VALIDATION.md](VALIDATION.md)。Android11の実WebViewでoffline固定コア・再開・OS共有・native JSONを計測確認。iOSはMac/Xcodeがなくruntime未証明。
 Capacitorが不適合だと示す事実は現時点でないが、両OSの実機受入は完了していない。
 
 | PoC gate | 実装と証拠 / 限界 |
@@ -87,3 +87,17 @@ Apple [App Review 4.2](https://developer.apple.com/app-store/review/guidelines/#
 の審査合格は保証しない。同梱offline固定依頼、購入進捗、端末内catalog、OS共有/JSON取込が
 具体的価値だが、実機証拠とレビュー説明、販売主体、privacy/権限、store metadata、
 署名/Developer account/残余riskの人間受容は別gate。法的文書はここで確定・公開しない。
+
+## Web初期読み込みの分離（継続実装）
+
+baseと同じlock versionでWebのentryを比較し、native専用プラグインの登録処理を初期entryから
+動的chunkへ分離した。`runtime.ts` はtype-only importと、document-startで注入される
+`Capacitor.isNativePlatform()` の存在確認だけで判定する。User Agentやlocalhostだけで判定しない。
+このAPIは固定した8.5.3のAndroid/iOS双方の `assets/native-bridge.js` でdocument-startに設定される
+ことを配布ソースで確認した。通常WebではCapacitor未定義でも利用できる。
+
+nativeの共有/JSON/ライフサイクルは利用時・起動時だけ動的importする。chunk読込に失敗した共有は
+既存の `failed` に戻し、clipboardへ自動fallbackしない。nativeのsafe-area classは同期的に設定する。
+通常Webのfeature flags、browser share/clipboard、BASE_PATH、既存保存形状を変更しない。
+Web entry gzipはbase約123.4KB、初回head約129.2KBから約125.6KBへ減少（Python gzipの同一条件）。
+これはサイズの比較であり、実機の速度測定とは区別する。

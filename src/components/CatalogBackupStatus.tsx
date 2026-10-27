@@ -1,5 +1,4 @@
 import { getRecoveryBaseUrl, isNativeApp } from '../platform/runtime'
-import { exportNativeCatalogJson } from '../platform/nativeShare'
 import { useState } from 'react'
 import type { HouseholdCatalog } from '../types/householdCatalog'
 import {
@@ -67,7 +66,9 @@ export function CatalogBackupStatus({
       )
       if (!bundle.isWithinUrlLimit) {
         const result = isNativeApp()
-          ? await exportNativeCatalogJson(bundle)
+          ? await import('../platform/nativeShare')
+            .then(({ exportNativeCatalogJson }) => exportNativeCatalogJson(bundle))
+            .catch(() => 'failed' as const)
           : downloadCatalogRecoveryJson(bundle) ? 'shared' : 'failed'
         if (result === 'cancelled') {
           setNotice('共有をキャンセルしました。商品リストは端末内に保存されています。')

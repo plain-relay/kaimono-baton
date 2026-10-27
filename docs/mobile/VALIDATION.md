@@ -1,6 +1,6 @@
 # アプリ実装の検証記録
 
-検証日は2026-10-26 UTC。Ownerチャット依頼・Issueなし。Draft PR #29の仕様に従う。
+検証日は2026-10-26〜27 UTC。Ownerチャット依頼・Issueなし。Draft PR #29の仕様に従う。
 Base: `8fd690496b5d99b67985cb724f489ca40a54d782`。
 Branch: `feat/native-android-ios-20261026`。exact head / PR / CI / artifactは最終PR本文に記録する。
 
@@ -10,7 +10,11 @@ Branch: `feat/native-android-ios-20261026`。exact head / PR / CI / artifactは�
 
 Linux x86_64、Node 22.23.4 / npm 10.9.9、JDK 21、Android SDK 36。
 Mac/Xcodeなし。USB接続Android/iPhone/iPadなし。利用者データなし、repo fixture/合成データのみ。
-Androidエミュレーターの結果は実機と区別する。
+Androidエミュレーターの結果は実機と区別する。Ownerも利用できるMacがないと回答。
+Android 16/API36のsoftware起動ではboot完了に至らなかったが、Android 11/API30は351秒でboot完了。
+WebView 83.0.4103.120 / ranchu / x86_64 / 480×800 / TCG（ハードウェア仮想化なし）。
+System UIのANRが発生し、通常のUI Automator操作は不安定だったため、実WebViewを操作する
+合成エミュレーター専用の計測テストを使用した。実機の操作性/a11y/IMEを証明するものではない。
 
 ## 自動検証
 
@@ -24,7 +28,7 @@ Androidエミュレーターの結果は実機と区別する。
 | photo runtime/staging runtime | 既存local workerd/SQLiteと認証boundary check。外部staging deployではない |
 | coverage / Web build | 既存thresholdを維持。nativeとWebの出力を分離 |
 | native build / sync | TypeScript、同梱assets、強制OFF/CSP/公開baseのtest。両OSへ同期 |
-| Android debug APK | 最終PR本文の実ファイル・SHA256・source commit参照 |
+| Android debug APK | app build / AndroidTest build成功。最終clean headの実ファイル・SHA256・source commitはPR本文参照 |
 | iOS | asset sync・plist/XML/SPM path静的確認のみ。Xcode compile/Simulator/iPhoneは未実施 |
 
 新規runtime codeは共通parserの移動、薄いadapter、native専用UI、強制OFF getterとその利用箇所。
@@ -35,15 +39,34 @@ JSON取込は既存preview/置き換え確認。nativeの共有後もbackup保�
 
 | 機能 | Web互換の根拠 | Android | iOS |
 | --- | --- | --- | --- |
-| 固定依頼・数量・条件・売場順 | 既存tests/codecを維持 | 同じReact同梱、個別端末受入が必要 | 同じReact同梱、ビルド・端末未検証 |
-| 公開URL・LINE 2,200文字 | 既存share/budget tests | canonical HTTPS + OS Share adapter | 同じadapter、OS未検証 |
-| 既存v1-v4読み込み | golden fixtures | paste + 既存decoder | 同じ実装、OS未検証 |
-| 購入進捗・draft・catalog | 既存storage tests | 同じstorage、再開動線を追加 | 同じ実装、OS永続化未検証 |
+| 固定依頼・数量・条件・売場順 | 既存tests/codecを維持 | Android11計測で同梱起動/作成PASS、実機受入待ち | 同じReact同梱、ビルド・端末未検証 |
+| 公開URL・LINE 2,200文字 | 既存share/budget tests | Android11 OS chooser / 取消・公開base・予算PASS | 同じadapter、OS未検証 |
+| 既存v1-v4読み込み | golden fixtures | 実WebView v3 paste PASS、v1-v4 golden tests PASS | 同じ実装、OS未検証 |
+| 購入進捗・draft・catalog | 既存storage tests | Android11 process終了後の進捗再開PASS | 同じ実装、OS永続化未検証 |
 | catalog復旧URL/JSON | 既存validator/preview | paste / Document Picker / private-cache share | 同じ実装、Picker/share未検証 |
-| offline固定コア | サーバー不要の既存ロジック | assets同梱、実測は最終PRへ | assets同梱、起動未検証 |
+| offline固定コア | サーバー不要の既存ロジック | network loads遮断の実WebViewで固定コアPASS | assets同梱、起動未検証 |
 | 写真/v5/手書き | 既存Web flagsを変更しない | 強制OFF | 強制OFF |
 | App/Universal Links | 公開HTTPS URLはWebへ | association未設定、paste代替 | entitlement未設定、paste代替 |
 | OSからの直接共有受信 | 該当なし | ACTION_SEND未実装 | Share Extension未実装 |
+
+## Android実WebViewの計測（実機と区別）
+
+`BundledCoreTest` を明示的なsyntheticDevice flag + emulator hardware guardで実行する。
+Wi-Fi/mobile OFFだけでは仮想有線が残るため、テスト用WebViewでnetwork loadsをblockし、
+network available=falseにしてreloadした。同梱assetのinterceptor、実native bridge/pluginは維持する。
+web contents debuggingはOFFのまま。JSON入力のFileはテストが注入し、OS Picker操作とは区別する。
+
+| Case | 確認内容 | 結果 |
+| --- | --- | --- |
+| createOpenAndPersistFixedRequestOffline | 同梱起動、native API、offline、作成/確認、v3 URLのpaste/decoder、購入進捗保存 | PASS |
+| resumeAfterProcessRestartOffline | force-stop後、新process/WebViewから固定依頼と購入進捗を再開 | PASS |
+| nativeShareUsesPublicUrlAndCancellationPreservesDraft | 公開HTTPS/LINE hint/2,200文字、実OS chooser、取消後のdraft保持とcopy無し | PASS |
+| catalogJsonExportUsesPrivateCacheAndRequiresConfirmation | JSON preview/復旧/編集、private cache、FileProvider chooser、取消後未backup | PASS（最終artifactも再確認） |
+
+最終clean artifactでの結果とソース対応はPR本文/`artifacts/android-runtime/results.json`へ記録する。
+OS Picker、外部保存先での実保存、LINE受信、回転/IME/a11y、実機・iOSは別gate。
+JSON caseの初回は、既存backupを復旧するとbacked-upになる現行仕様を未backupと誤って仮定した。
+仕様は変えず、復旧後の編集で未backupにしてから取消を検証するよう試験条件を修正した。
 
 ## High security checklist
 
@@ -67,7 +90,7 @@ JSON取込は既存preview/置き換え確認。nativeの共有後もbackup保�
 
 | 重要度 | 未完了 | 担当 / gate |
 | --- | --- | --- |
-| P0 | 現時点で既知なし（独立レビュー前の暫定） | exact-range review |
+| P0 | 既知のcode findingなし。新headの独立レビューは最終PR参照 | exact-range review |
 | P1 | iOS Xcode buildと両OS実機受入証拠がない。公開可能/完成とは判定しない | OwnerのMac/端末、release前必須 |
 | P2 | association未設定、OS直接共有受信未実装 | HTTPS Web fallback/paste代替は実装。必要なら別task・ドメイン権限確認 |
 | P2 | OS Picker/Share/再起動保存/更新/reinstall/backup、IME/回転/文字拡大/a11yの実機差異 | OS別checklistをOwner実施 |

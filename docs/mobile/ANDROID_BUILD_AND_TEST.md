@@ -89,3 +89,55 @@ App Linksのassociation、DNS、GitHub Pagesルート設定は未変更で、完
   `server.url`やallowNavigation追加で公開サイトへ迂回しない。
 - 保存容量不足: 日本語エラーを確認し、ユーザー自身のバックアップを優先する。
 - build成功と端末正常動作は別。未実施の受入項目はVALIDATIONへ残す。
+
+## 合成エミュレーター専用の計測テスト
+
+`BundledCoreTest` はAndroid/iOS実機や利用者の保存データには実行しない。
+`syntheticDevice=true` とemulator hardwareの両方が必要。fixture試験の最初に試験用WebViewの
+localStorageを初期化するため、実データのある環境では実行しない。
+`evaluateJavascript` は計測テストから実WebViewを操作するためだけに使い、アプリ本体の
+WebView debuggingやJS bridge公開設定を緩めない。
+
+```sh
+npm run sync:native
+cd android
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+cd ..
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell svc wifi disable
+adb shell svc data disable
+adb shell am instrument -w -r -e syntheticDevice true \
+  -e class dev.kaimonobaton.preview.BundledCoreTest#createOpenAndPersistFixedRequestOffline \
+  dev.kaimonobaton.preview.test/androidx.test.runner.AndroidJUnitRunner
+adb shell am force-stop dev.kaimonobaton.preview
+adb shell am instrument -w -r -e syntheticDevice true \
+  -e class dev.kaimonobaton.preview.BundledCoreTest#resumeAfterProcessRestartOffline \
+  dev.kaimonobaton.preview.test/androidx.test.runner.AndroidJUnitRunner
+adb shell am instrument -w -r -e syntheticDevice true \
+  -e class dev.kaimonobaton.preview.BundledCoreTest#nativeShareUsesPublicUrlAndCancellationPreservesDraft \
+  dev.kaimonobaton.preview.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+上から順に実行する。計測テストではWebViewのnetwork loadsをblockし、network availableもfalseに
+設定してreloadする。emulatorの仮想有線はWi-Fi/mobile OFFだけでは切れないため、この条件を併記する。
+`INSTRUMENTATION_STATUS_CODE: 0` とJUnit成功を確認し、assumptionによるskipを成功扱いにしない。
+生成URL/入力/トークンはlogへ出さず、JUnitはstageとbooleanだけを確認する。
+固定依頼fixtureは既存 `PUBLISHED_V3_REQUEST_FIXTURE` のコピーで、既存fixtureを再生成・変更しない。
+共有先へ送信せず、OS chooserの生成とcancelだけ確認する。LINE受信とOS Pickerは別の受入項目。
+
+全サブmoduleの `assembleDebugAndroidTest` は不要。生成Cordova module自身のtest依存で
+Kotlin stdlibの重複が出るため、本アプリの検証は上記の `:app:` 指定taskを使用する。
+実行結果はVALIDATION/PRへ記録し、ソース追加やbuildだけで成功扱いにしない。
+
+JSON取込/書出しのbridgeを確認する追加case:
+
+```sh
+adb shell am instrument -w -r -e syntheticDevice true \
+  -e class dev.kaimonobaton.preview.BundledCoreTest#catalogJsonExportUsesPrivateCacheAndRequiresConfirmation \
+  dev.kaimonobaton.preview.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+このcaseは試験用JSONをFile入力へ注入して既存preview/復旧処理を通し、native Filesystemの
+private-cache書込、FileProvider共有chooser、取消後の未backup状態を確認する。
+OS Document Pickerでファイルを選ぶ操作と、外部保存先での保存・内容確認は別に必要。
