@@ -118,28 +118,32 @@ final class AppUITests: XCTestCase {
         reveal(share)
         stage(.share_sheet)
         share.tap()
-        let closeQuery = NSPredicate(format: "label IN %@ OR identifier IN %@",
-            ["Close", "Cancel", "閉じる", "キャンセル"], ["Close", "Cancel", "CloseButton"])
-        let close = app.buttons.matching(closeQuery).firstMatch
-        let systemClose = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons.matching(closeQuery).firstMatch
+        let closeQuery = NSPredicate(format: "label CONTAINS[c] 'close' OR label IN %@ OR identifier IN %@",
+            ["Cancel", "Dismiss", "閉じる", "キャンセル"], ["Close", "Cancel", "CloseButton"])
+        let close = app.descendants(matching: .any).matching(closeQuery).firstMatch
+        let systemClose = XCUIApplication(bundleIdentifier: "com.apple.springboard").descendants(matching: .any).matching(closeQuery).firstMatch
         let rejected = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "共有またはコピーができませんでした")).firstMatch
         let sheetReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             close.exists || systemClose.exists || rejected.exists
         }, object: nil)
-        _ = XCTWaiter.wait(for: [sheetReady], timeout: 30)
+        _ = XCTWaiter.wait(for: [sheetReady], timeout: 15)
         if rejected.exists {
             stage(.share_plugin_failure)
             XCTFail("native share rejected")
             return
         }
-        guard close.exists || systemClose.exists else {
-            stage(.share_close_missing)
-            XCTFail("native activity close control missing")
-            return
-        }
         stage(.share_cancel)
-        if close.exists { close.tap() } else { systemClose.tap() }
         let cancelled = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "共有をキャンセルしました")).firstMatch
+        if close.exists && close.isHittable { close.tap() }
+        else if systemClose.exists && systemClose.isHittable { systemClose.tap() }
+        else {
+            // System share UI does not consistently expose its Close control to XCUITest.
+            // Use actual interactive dismissal; never call a mocked completion handler.
+            app.swipeDown()
+            if !cancelled.waitForExistence(timeout: 5) {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+            }
+        }
         XCTAssertTrue(cancelled.waitForExistence(timeout: 20), "OS cancellation returned to application")
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "依頼文をコピーしました")).firstMatch.exists, "no clipboard fallback")
         stage(.cancelled_restore)

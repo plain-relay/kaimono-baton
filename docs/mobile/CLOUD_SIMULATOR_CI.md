@@ -20,7 +20,7 @@ PRのexact headをcheckoutし、Node22.23.4でnpm ci / npm run sync:nativeを実
 - いずれも一時的な合成端末のみ。OS Picker/LINE受信/IME/a11y/実機の証拠には代替しない。
 
 iOSの3ケースは、同梱WKWebViewとnative受付、既存v3 fixtureの4項目・購入進捗、
-terminate/relaunch後の再開、作成draftの保存、実UIActivityViewControllerのCloseによる取消と
+terminate/relaunch後の再開、作成draftの保存、実UIActivityViewControllerのClose/interactive dismissによる取消と
 draft保持を対象にする。application本体へtest専用hookを追加せず、XCTestだけで画面操作する。
 Simulator限定compileと明示synthetic flagで実機上の実行を拒否。skipをPASSと数えない。
 
@@ -64,7 +64,9 @@ rollbackはCI追加のrevertかDraft PRを閉じること。既存Web/WorkerのP
 
 初回でiOS compileとdraft/relaunchは成功したが、購入済みカードは詳細を折り畳む既存仕様のため、
 UI testが非表示のreset buttonを探して失敗した。表示される購入済みsummaryを確認する形へ修正。
-OS shareのClose controlは言語・表示先も確認する。取消後のアプリの明示notice/draft保持は必須のまま。
+OS shareのClose controlは言語・表示先・accessibility roleも確認し、検出できない場合は実際の
+下方向gesture/dim領域tapで閉じる。取消後のアプリの明示notice/draft保持は必須のまま。
+native pluginのcompletion callbackを模擬して成功させる処理はない。
 結果とsource対応は最終PRに記録し、この変更だけで成功とは呼ばない。
 
 Android初回の再開ケースは失敗し、診断追加後の同じアプリコードでは4件通過したため、
