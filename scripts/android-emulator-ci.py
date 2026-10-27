@@ -17,6 +17,24 @@ CASES = (
     "nativeShareUsesPublicUrlAndCancellationPreservesDraft",
     "catalogJsonExportUsesPrivateCacheAndRequiresConfirmation",
 )
+FAILURE_STAGES = {
+    "resume button did not complete": "resume_button",
+    "restored progress did not complete": "restored_progress",
+    "Android back to home did not complete": "android_back_home",
+    "progress retained after back did not complete": "retained_progress",
+    "bundled home did not complete": "bundled_home",
+    "native bridge": "native_bridge",
+    "offline test environment": "offline_environment",
+    "WebView evaluation timeout": "evaluation_timeout",
+}
+
+
+def failure_stage(log):
+    # Only a known test-owned assertion name is exported, never the surrounding stack/DOM.
+    for marker, stage in FAILURE_STAGES.items():
+        if "AssertionError: " + marker in log or "ComparisonFailure: " + marker in log:
+            return stage
+    return "instrumentation"
 
 
 def adb(args):
@@ -37,6 +55,7 @@ def main():
     assert meta["sourceCommit"] == sha and meta["dirty"] is False and meta["optionalFeatures"] is False
     report = {"schemaVersion": 1, "sourceSha": sha, "syntheticOnly": True,
               "physicalDeviceVerified": False, "installed": False,
+              "failureStage": None,
               "apkSha256": hashlib.sha256(app.read_bytes()).hexdigest(),
               "tests": {name: "not_run" for name in CASES}}
     shutil.copy2(app, OUT / "app-debug.apk")
@@ -57,6 +76,8 @@ def main():
             passed = code == 0 and "OK (1 test)" in log and "INSTRUMENTATION_STATUS_CODE: 0" in log
             passed = passed and not any(x in log for x in ("INSTRUMENTATION_STATUS_CODE: -3", "INSTRUMENTATION_STATUS_CODE: -4"))
             report["tests"][name] = "passed" if passed else "failed"
+            if not passed:
+                report["failureStage"] = failure_stage(log)
             print("android: " + name + " " + report["tests"][name], flush=True)
             assert passed
         success = True
@@ -67,6 +88,7 @@ def main():
         assert set(report["tests"]) == set(CASES)
         assert all(x in {"passed", "failed", "not_run"} for x in report["tests"].values())
         assert re.fullmatch(r"[0-9a-f]{64}", report["apkSha256"])
+        assert report["failureStage"] is None or report["failureStage"] in set(FAILURE_STAGES.values()) | {"instrumentation"}
         (OUT / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report, sort_keys=True))
     return 0 if success else 1

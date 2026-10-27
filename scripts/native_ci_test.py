@@ -28,6 +28,19 @@ class NativeReportTest(unittest.TestCase):
         log = "Test Case '-[Other arbitrary]' passed\n" + ios.TESTS[0] + " passed"
         self.assertTrue(all(x == "not_run" for x in ios.test_statuses(log).values()))
 
+    def test_only_known_failure_stage_is_exported(self):
+        name = ios.TESTS[0]
+        log = "Test Case '-[AppUITests.AppUITests " + name + "]' started.\nBATON_STAGE=import_form\n"
+        log += "BATON_STAGE=arbitrary_untrusted_text\nTest Case '-[AppUITests.AppUITests " + name + "]' failed."
+        self.assertEqual(ios.test_failure_stages(log), {name: "import_form"})
+
+    def test_android_failure_stage_drops_surrounding_trace(self):
+        spec = importlib.util.spec_from_file_location("android_ci", Path(__file__).with_name("android-emulator-ci.py"))
+        android = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(android)
+        self.assertEqual(android.failure_stage("java.lang.AssertionError: restored progress did not complete\nother trace"), "restored_progress")
+        self.assertEqual(android.failure_stage("unclassified trace"), "instrumentation")
+
 
 if __name__ == "__main__":
     unittest.main()

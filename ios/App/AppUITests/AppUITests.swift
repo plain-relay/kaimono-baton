@@ -3,6 +3,14 @@ import XCTest
 /// Only the disposable CI Simulator is used; no application test hooks or mocked plugins.
 final class AppUITests: XCTestCase {
     private var app: XCUIApplication!
+    private enum Stage: String {
+        case home, create, draft_selected, import_form, fixed_open, progress
+        case relaunch, resume, draft_restore, review, share_sheet, share_cancel, cancelled_restore
+    }
+    private func stage(_ value: Stage) {
+        // This fixed enum is the only UI trace exported by the CI result producer.
+        print("BATON_STAGE=" + value.rawValue)
+    }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -13,6 +21,7 @@ final class AppUITests: XCTestCase {
         #endif
         app = XCUIApplication(bundleIdentifier: "dev.kaimonobaton.preview")
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        stage(.home)
         app.terminate()
         app.launch()
         XCTAssertTrue(home.waitForExistence(timeout: 30), "bundled home")
@@ -34,11 +43,13 @@ final class AppUITests: XCTestCase {
     }
 
     private func createDraft() {
+        stage(.create)
         home.tap()
         let increase = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "増やす（現在")).firstMatch
         XCTAssertTrue(increase.waitForExistence(timeout: 20), "create form")
         reveal(increase)
         increase.tap()
+        stage(.draft_selected)
         let review = app.buttons["確認へ"]
         reveal(review)
         XCTAssertTrue(review.isEnabled, "draft selected")
@@ -47,6 +58,7 @@ final class AppUITests: XCTestCase {
     func testBundledHomeAndFixedRequestPersistence() throws {
         // The native-only form and WKWebView prove the bundled application rendered.
         XCTAssertTrue(app.webViews.firstMatch.exists, "WKWebView rendered")
+        stage(.import_form)
         let disclosure = app.buttons["リンクを貼り付けて開く"]
         if disclosure.exists { disclosure.tap() }
         else { app.staticTexts["リンクを貼り付けて開く"].tap() }
@@ -57,6 +69,7 @@ final class AppUITests: XCTestCase {
         let link = "https://plain-relay.github.io/kaimono-baton/?openExternalBrowser=1#/l/" + encoded
         input.tap()
         input.typeText(link)
+        stage(.fixed_open)
         let open = app.buttons["アプリで開く"]
         reveal(open)
         open.tap()
@@ -65,23 +78,28 @@ final class AppUITests: XCTestCase {
         XCTAssertEqual(carts.count, 4, "published fixture item count")
         let cart = carts.element(boundBy: 3)
         reveal(cart)
+        stage(.progress)
         cart.tap()
         let reset = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "未購入に戻す")).firstMatch
         XCTAssertTrue(reset.waitForExistence(timeout: 10), "progress saved")
+        stage(.relaunch)
         app.terminate()
         app.launch()
         XCTAssertTrue(home.waitForExistence(timeout: 30), "relaunched bundled home")
         let resume = app.buttons["前回の買い物を再開"]
         XCTAssertTrue(resume.waitForExistence(timeout: 10), "saved fixed route")
+        stage(.resume)
         resume.tap()
         XCTAssertTrue(reset.waitForExistence(timeout: 20), "progress survived process restart")
     }
 
     func testDraftSurvivesRestart() {
         createDraft()
+        stage(.relaunch)
         app.terminate()
         app.launch()
         XCTAssertTrue(home.waitForExistence(timeout: 30), "draft relaunch")
+        stage(.draft_restore)
         home.tap()
         let review = app.buttons["確認へ"]
         XCTAssertTrue(review.waitForExistence(timeout: 20), "draft form restored")
@@ -90,17 +108,21 @@ final class AppUITests: XCTestCase {
 
     func testNativeShareCancellationPreservesDraft() {
         createDraft()
+        stage(.review)
         app.buttons["確認へ"].tap()
         let share = app.buttons["LINEで送る"]
         XCTAssertTrue(share.waitForExistence(timeout: 20), "request review")
         reveal(share)
+        stage(.share_sheet)
         share.tap()
         let close = app.buttons["Close"].firstMatch
         XCTAssertTrue(close.waitForExistence(timeout: 20), "native activity sheet")
+        stage(.share_cancel)
         close.tap()
         let cancelled = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "共有をキャンセルしました")).firstMatch
         XCTAssertTrue(cancelled.waitForExistence(timeout: 20), "OS cancellation returned to application")
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "依頼文をコピーしました")).firstMatch.exists, "no clipboard fallback")
+        stage(.cancelled_restore)
         app.terminate()
         app.launch()
         XCTAssertTrue(home.waitForExistence(timeout: 30), "cancel relaunch")

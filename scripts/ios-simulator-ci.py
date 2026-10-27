@@ -21,6 +21,8 @@ TESTS = (
     "testNativeShareCancellationPreservesDraft",
 )
 STAGES = {"environment", "resolve", "build", "artifact", "simulator", "tests", "complete"}
+UI_STAGES = {"home", "create", "draft_selected", "import_form", "fixed_open", "progress",
+             "relaunch", "resume", "draft_restore", "review", "share_sheet", "share_cancel", "cancelled_restore"}
 
 
 def command(args, name, timeout=900):
@@ -42,12 +44,28 @@ def test_statuses(log):
     return statuses
 
 
+def test_failure_stages(log):
+    failures = {}
+    current, stage = None, "unknown"
+    for line in log.splitlines():
+        for name in TESTS:
+            if re.search(r"Test Case '-\[[^\]\n]+ " + name + r"\]' started", line):
+                current, stage = name, "unknown"
+        marker = re.search(r"BATON_STAGE=([a-z_]+)", line)
+        if marker and marker[1] in UI_STAGES:
+            stage = marker[1]
+        for name in TESTS:
+            if re.search(r"Test Case '-\[[^\]\n]+ " + name + r"\]' (?:failed|skipped)", line):
+                failures[name] = stage if current == name else "unknown"
+    return failures
+
+
 def validate(report):
     assert set(report) == {
         "schemaVersion", "sourceSha", "runId", "runner", "xcodeVersion", "xcodeBuild",
         "swiftVersion", "simulatorSdk", "simulatorRuntime", "sourceTreeDirty", "syntheticOnly",
         "physicalDeviceVerified", "signingAllowed", "dependencies", "buildSucceeded", "tests",
-        "artifactSha256", "artifactBytes", "stage",
+        "artifactSha256", "artifactBytes", "stage", "testFailureStages",
     }
     assert report["schemaVersion"] == 1 and re.fullmatch(r"[0-9a-f]{40}", report["sourceSha"])
     assert re.fullmatch(r"[0-9]*", report["runId"])
@@ -60,6 +78,8 @@ def validate(report):
     assert type(report["buildSucceeded"]) is bool and report["stage"] in STAGES
     assert set(report["tests"]) == set(TESTS)
     assert all(x in {"passed", "failed", "not_run"} for x in report["tests"].values())
+    assert set(report["testFailureStages"]) <= set(TESTS)
+    assert all(x in UI_STAGES | {"unknown"} for x in report["testFailureStages"].values())
     assert report["artifactSha256"] is None or re.fullmatch(r"[0-9a-f]{64}", report["artifactSha256"])
     assert type(report["artifactBytes"]) is int and report["artifactBytes"] >= 0
     for dep in report["dependencies"]:
@@ -81,6 +101,7 @@ def main():
         "syntheticOnly": True, "physicalDeviceVerified": False, "signingAllowed": False,
         "dependencies": [], "buildSucceeded": False, "tests": {name: "not_run" for name in TESTS},
         "artifactSha256": None, "artifactBytes": 0, "stage": "environment",
+        "testFailureStages": {},
     }
     device = None
     success = False
@@ -138,6 +159,7 @@ def main():
                                "test-without-building"], "tests", 1200)
         log = (PRIVATE / "tests.log").read_text()
         report["tests"] = test_statuses(log)
+        report["testFailureStages"] = test_failure_stages(log)
         assert code == 0 and all(x == "passed" for x in report["tests"].values())
         report["stage"] = "complete"
         success = True
